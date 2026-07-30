@@ -1,142 +1,248 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { estimateTempo } from "./tempo-engine";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  estimateTempo,
+  nearestTimingErrorMs,
+  subdivisionIntervalMs,
+} from "./tempo-engine";
 
-type ListenStatus = "idle" | "starting" | "listening" | "error";
+type InputStatus = "idle" | "starting" | "listening" | "error";
+type TimingHit = { id: number; errorMs: number };
 
 const subdivisions = [
-  { value: 1, label: "Quarter", count: "1 pick / beat" },
-  { value: 2, label: "Eighth", count: "2 picks / beat" },
-  { value: 4, label: "Sixteenth", count: "4 picks / beat" },
+  { value: 1, label: "1/4" },
+  { value: 2, label: "1/8" },
+  { value: 4, label: "1/16" },
 ];
 
-const meterSegments = Array.from({ length: 16 }, (_, index) => index);
-const emptyTimingBars = Array.from({ length: 9 }, () => 0);
+const clampBpm = (value: number) =>
+  Math.max(30, Math.min(240, Math.round(value)));
 
 export default function Home() {
-  const [status, setStatus] = useState<ListenStatus>("idle");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [bpm, setBpm] = useState<number | null>(null);
-  const [confidence, setConfidence] = useState(0);
-  const [attackCount, setAttackCount] = useState(0);
-  const [inputLevel, setInputLevel] = useState(0);
-  const [sensitivity, setSensitivity] = useState(7);
-  const [attacksPerBeat, setAttacksPerBeat] = useState(2);
   const [targetBpm, setTargetBpm] = useState(100);
-  const [timingOffsets, setTimingOffsets] =
-    useState<number[]>(emptyTimingBars);
-  const [attackFlash, setAttackFlash] = useState(false);
+  const [attacksPerBeat, setAttacksPerBeat] = useState(2);
+  const [clickVolume, setClickVolume] = useState(100);
+  const [sensitivity, setSensitivity] = useState(7);
+  const [sessionRunning, setSessionRunning] = useState(false);
+  const [inputStatus, setInputStatus] = useState<InputStatus>("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [detectedBpm, setDetectedBpm] = useState<number | null>(null);
+  const [confidence, setConfidence] = useState(0);
+  const [inputLevel, setInputLevel] = useState(0);
+  const [attackCount, setAttackCount] = useState(0);
+  const [timingHits, setTimingHits] = useState<TimingHit[]>([]);
+  const [latestError, setLatestError] = useState<number | null>(null);
+  const [activeBeat, setActiveBeat] = useState(-1);
 
   const audioContextRef = useRef<AudioContext | null>(null);
+  const clickBufferRef = useRef<AudioBuffer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pulseTimersRef = useRef<Set<number>>(new Set());
+  const nextClickTimeRef = useRef(0);
+  const beatIndexRef = useRef(0);
+  const gridOriginMsRef = useRef<number | null>(null);
   const intervalsRef = useRef<number[]>([]);
   const lastOnsetRef = useRef<number | null>(null);
   const lastDetectedAtRef = useRef(0);
+  const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
+  const clickVolumeRef = useRef(clickVolume / 100);
   const sensitivityRef = useRef(sensitivity);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRunningRef = useRef(false);
+  const hitIdRef = useRef(0);
+
+  const resetMeasurements = useCallback(() => {
+    intervalsRef.current = [];
+    lastOnsetRef.current = null;
+    lastDetectedAtRef.current = 0;
+    hitIdRef.current = 0;
+    setDetectedBpm(null);
+    setConfidence(0);
+    setAttackCount(0);
+    setTimingHits([]);
+    setLatestError(null);
+  }, []);
 
   useEffect(() => {
+    targetBpmRef.current = targetBpm;
     attacksPerBeatRef.current = attacksPerBeat;
+
     const estimate = estimateTempo(intervalsRef.current, attacksPerBeat);
     if (estimate) {
-      setBpm(estimate.bpm);
+      setDetectedBpm(estimate.bpm);
       setConfidence(estimate.confidence);
-      setTimingOffsets(estimate.offsets);
     }
-  }, [attacksPerBeat]);
+
+    const context = audioContextRef.current;
+    if (sessionRunningRef.current && context) {
+      const restartAt = context.currentTime + 0.12;
+      nextClickTimeRef.current = restartAt;
+      gridOriginMsRef.current = restartAt * 1000;
+      beatIndexRef.current = 0;
+      setActiveBeat(-1);
+      setTimingHits([]);
+      setLatestError(null);
+    }
+  }, [attacksPerBeat, targetBpm]);
+
+  useEffect(() => {
+    clickVolumeRef.current = clickVolume / 100;
+  }, [clickVolume]);
 
   useEffect(() => {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
 
-  const resetSession = useCallback(() => {
-    intervalsRef.current = [];
-    lastOnsetRef.current = null;
-    lastDetectedAtRef.current = 0;
-    setBpm(null);
-    setConfidence(0);
-    setAttackCount(0);
-    setTimingOffsets(emptyTimingBars);
-  }, []);
-
   const registerOnset = useCallback((timeMs: number) => {
-    if (timeMs - lastDetectedAtRef.current < 75) return;
-    lastDetectedAtRef.current = timeMs;
+    const expectedInterval = subdivisionIntervalMs(
+      targetBpmRef.current,
+      attacksPerBeatRef.current,
+    );
+    const refractoryMs = Math.max(42, Math.min(90, expectedInterval * 0.42));
 
+    if (timeMs - lastDetectedAtRef.current < refractoryMs) return;
+    lastDetectedAtRef.current = timeMs;
     setAttackCount((count) => count + 1);
-    setAttackFlash(true);
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setAttackFlash(false), 90);
+
+    const gridOriginMs = gridOriginMsRef.current;
+    if (sessionRunningRef.current && gridOriginMs !== null) {
+      const errorMs = nearestTimingErrorMs(
+        timeMs,
+        gridOriginMs,
+        targetBpmRef.current,
+        attacksPerBeatRef.current,
+      );
+      const hit = { id: ++hitIdRef.current, errorMs };
+      setLatestError(errorMs);
+      setTimingHits((hits) => [...hits, hit].slice(-28));
+    }
 
     const previousOnset = lastOnsetRef.current;
     lastOnsetRef.current = timeMs;
-
     if (previousOnset === null) return;
 
     const interval = timeMs - previousOnset;
     if (interval > 3000) {
       intervalsRef.current = [];
-      setBpm(null);
+      setDetectedBpm(null);
       setConfidence(0);
-      setTimingOffsets(emptyTimingBars);
       return;
     }
 
-    if (interval < 60) return;
-
-    intervalsRef.current = [...intervalsRef.current, interval].slice(-12);
+    if (interval < 35) return;
+    intervalsRef.current = [...intervalsRef.current, interval].slice(-14);
     const estimate = estimateTempo(
       intervalsRef.current,
       attacksPerBeatRef.current,
     );
-
     if (estimate) {
-      setBpm(estimate.bpm);
+      setDetectedBpm(estimate.bpm);
       setConfidence(estimate.confidence);
-      setTimingOffsets(estimate.offsets);
     }
   }, []);
 
-  const stopAudio = useCallback(() => {
+  const scheduleClick = useCallback(
+    (context: AudioContext, time: number, beat: number) => {
+      const buffer = clickBufferRef.current;
+      if (!buffer) return;
+
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const gain = context.createGain();
+      const oscillator = context.createOscillator();
+      const oscillatorGain = context.createGain();
+      const accent = beat === 0;
+      const volume = clickVolumeRef.current;
+
+      source.buffer = buffer;
+      filter.type = "bandpass";
+      filter.frequency.setValueAtTime(accent ? 3600 : 2600, time);
+      filter.Q.setValueAtTime(0.8, time);
+      gain.gain.setValueAtTime(Math.max(0.0001, volume * 0.92), time);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.055);
+
+      oscillator.type = "square";
+      oscillator.frequency.setValueAtTime(accent ? 1850 : 1320, time);
+      oscillatorGain.gain.setValueAtTime(
+        Math.max(0.0001, volume * (accent ? 0.5 : 0.36)),
+        time,
+      );
+      oscillatorGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
+
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(context.destination);
+      oscillator.connect(oscillatorGain);
+      oscillatorGain.connect(context.destination);
+
+      source.start(time);
+      source.stop(time + 0.06);
+      oscillator.start(time);
+      oscillator.stop(time + 0.05);
+
+      const delay = Math.max(0, (time - context.currentTime) * 1000);
+      const timer = window.setTimeout(() => {
+        setActiveBeat(beat);
+        pulseTimersRef.current.delete(timer);
+      }, delay);
+      pulseTimersRef.current.add(timer);
+    },
+    [],
+  );
+
+  const runScheduler = useCallback(() => {
+    const context = audioContextRef.current;
+    if (!context || !sessionRunningRef.current) return;
+
+    while (nextClickTimeRef.current < context.currentTime + 0.12) {
+      scheduleClick(
+        context,
+        nextClickTimeRef.current,
+        beatIndexRef.current,
+      );
+      nextClickTimeRef.current += 60 / targetBpmRef.current;
+      beatIndexRef.current = (beatIndexRef.current + 1) % 4;
+    }
+  }, [scheduleClick]);
+
+  const stopSession = useCallback(() => {
+    sessionRunningRef.current = false;
+
+    if (schedulerRef.current) {
+      clearInterval(schedulerRef.current);
+      schedulerRef.current = null;
+    }
     if (animationFrameRef.current !== null) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
+    pulseTimersRef.current.forEach((timer) => clearTimeout(timer));
+    pulseTimersRef.current.clear();
 
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
 
     const context = audioContextRef.current;
     audioContextRef.current = null;
-    if (context && context.state !== "closed") {
-      void context.close();
-    }
+    clickBufferRef.current = null;
+    if (context && context.state !== "closed") void context.close();
 
+    gridOriginMsRef.current = null;
+    setSessionRunning(false);
+    setInputStatus("idle");
     setInputLevel(0);
+    setActiveBeat(-1);
   }, []);
 
-  const stopListening = useCallback(() => {
-    stopAudio();
-    setStatus("idle");
-  }, [stopAudio]);
+  const startInputAnalysis = useCallback(
+    async (context: AudioContext) => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Audio input is not available in this browser.");
+      }
 
-  const startListening = useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus("error");
-      setErrorMessage(
-        "This browser cannot access an audio input. Try a current version of Chrome, Edge, or Safari.",
-      );
-      return;
-    }
-
-    setStatus("starting");
-    setErrorMessage("");
-    resetSession();
-
-    try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           autoGainControl: false,
@@ -144,8 +250,10 @@ export default function Home() {
           noiseSuppression: false,
         },
       });
-      const context = new AudioContext({ latencyHint: "interactive" });
-      await context.resume();
+      if (!sessionRunningRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       const source = context.createMediaStreamSource(stream);
       const highPass = context.createBiquadFilter();
@@ -156,13 +264,9 @@ export default function Home() {
       highPass.Q.value = 0.7;
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.08;
-
       source.connect(highPass);
       highPass.connect(analyser);
-
       streamRef.current = stream;
-      audioContextRef.current = context;
-      setStatus("listening");
 
       const spectrum = new Uint8Array(analyser.frequencyBinCount);
       const previousSpectrum = new Uint8Array(analyser.frequencyBinCount);
@@ -180,7 +284,12 @@ export default function Home() {
       let nextMeterUpdate = 0;
 
       const analyse = () => {
-        if (audioContextRef.current !== context) return;
+        if (
+          audioContextRef.current !== context ||
+          !sessionRunningRef.current
+        ) {
+          return;
+        }
 
         analyser.getByteFrequencyData(spectrum);
         analyser.getFloatTimeDomainData(waveform);
@@ -217,17 +326,16 @@ export default function Home() {
         }
 
         const currentSensitivity = sensitivityRef.current;
-        const deviationMultiplier = 3.45 - currentSensitivity * 0.22;
         const fluxThreshold =
-          fluxMean + fluxDeviation * deviationMultiplier + 0.18;
+          fluxMean +
+          fluxDeviation * (3.45 - currentSensitivity * 0.22) +
+          0.18;
         const minimumRms = 0.0025 + (10 - currentSensitivity) * 0.0012;
-        const isCalibrated = context.currentTime - startedAt > 0.65;
 
         if (
-          isCalibrated &&
+          context.currentTime - startedAt > 0.55 &&
           spectralFlux > fluxThreshold &&
-          rms > minimumRms &&
-          nowMs - lastDetectedAtRef.current > 75
+          rms > minimumRms
         ) {
           registerOnset(nowMs);
         }
@@ -235,193 +343,142 @@ export default function Home() {
         animationFrameRef.current = requestAnimationFrame(analyse);
       };
 
+      setInputStatus("listening");
       animationFrameRef.current = requestAnimationFrame(analyse);
+    },
+    [registerOnset],
+  );
+
+  const startSession = useCallback(async () => {
+    setErrorMessage("");
+    setInputStatus("starting");
+    resetMeasurements();
+
+    const context = new AudioContext({ latencyHint: "interactive" });
+    audioContextRef.current = context;
+    await context.resume();
+
+    const bufferLength = Math.floor(context.sampleRate * 0.055);
+    const clickBuffer = context.createBuffer(1, bufferLength, context.sampleRate);
+    const clickData = clickBuffer.getChannelData(0);
+    for (let index = 0; index < bufferLength; index += 1) {
+      const decay = Math.pow(1 - index / bufferLength, 4);
+      clickData[index] = (Math.random() * 2 - 1) * decay;
+    }
+    clickBufferRef.current = clickBuffer;
+
+    sessionRunningRef.current = true;
+    setSessionRunning(true);
+    const firstClickAt = context.currentTime + 0.16;
+    nextClickTimeRef.current = firstClickAt;
+    gridOriginMsRef.current = firstClickAt * 1000;
+    beatIndexRef.current = 0;
+    runScheduler();
+    schedulerRef.current = setInterval(runScheduler, 25);
+
+    try {
+      await startInputAnalysis(context);
     } catch (error) {
-      stopAudio();
-      setStatus("error");
+      setInputStatus("error");
       if (error instanceof DOMException && error.name === "NotAllowedError") {
         setErrorMessage(
-          "Microphone access was blocked. Allow it in your browser, then try again.",
+          "Microphone access is blocked. The metronome still works; allow microphone access to measure the guitar.",
         );
       } else {
         setErrorMessage(
-          "I could not start the audio input. Check that your microphone or interface is connected.",
+          "No guitar input was found. The metronome is still running.",
         );
       }
     }
-  }, [registerOnset, resetSession, stopAudio]);
+  }, [resetMeasurements, runScheduler, startInputAnalysis]);
 
   useEffect(
     () => () => {
-      stopAudio();
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      stopSession();
     },
-    [stopAudio],
+    [stopSession],
   );
 
-  const bpmDelta = bpm === null ? null : bpm - targetBpm;
-  const roundedDelta = bpmDelta === null ? 0 : Math.round(Math.abs(bpmDelta));
-  const tempoPosition =
-    bpm === null ? 0 : Math.max(0, Math.min(100, ((bpm - 40) / 180) * 100));
-  const selectedSubdivision =
-    subdivisions.find((item) => item.value === attacksPerBeat) ??
-    subdivisions[1];
-  const statusCopy =
-    status === "starting"
-      ? "Connecting input…"
-      : status === "listening"
-        ? "Listening live"
-        : status === "error"
-          ? "Input needs attention"
-          : bpm === null
-            ? "Ready when you are"
-            : "Last measured phrase";
-  const paceLabel =
-    bpmDelta === null
-      ? "Play at least four even notes"
-      : Math.abs(bpmDelta) < 1.5
-        ? "Right on target"
-        : `${roundedDelta} BPM ${bpmDelta > 0 ? "fast" : "slow"}`;
-  const coachingCopy =
-    bpmDelta === null
-      ? "Keep the pick attack clean and leave a little space between notes."
-      : Math.abs(bpmDelta) < 1.5
-        ? "Your pulse is sitting comfortably on the target."
-        : bpmDelta > 0
-          ? "Relax your picking hand and let a little more time open up."
-          : "Bring the next pick forward slightly without tensing up.";
+  const timingStats = useMemo(() => {
+    if (timingHits.length === 0) return null;
+    const errors = timingHits.map((hit) => hit.errorMs);
+    const averageAbsolute =
+      errors.reduce((sum, value) => sum + Math.abs(value), 0) / errors.length;
+    const bias = errors.reduce((sum, value) => sum + value, 0) / errors.length;
+    const onTime = Math.round(
+      (errors.filter((value) => Math.abs(value) <= 30).length / errors.length) *
+        100,
+    );
+    return { averageAbsolute, bias, onTime };
+  }, [timingHits]);
+
+  const timingWord =
+    latestError === null
+      ? "Waiting"
+      : Math.abs(latestError) <= 12
+        ? "On time"
+        : latestError < 0
+          ? "Early"
+          : "Late";
+  const statusLabel =
+    inputStatus === "listening"
+      ? "Guitar input live"
+      : inputStatus === "starting"
+        ? "Connecting input"
+        : inputStatus === "error"
+          ? "Metronome only"
+          : "Stopped";
 
   return (
-    <main>
-      <header className="site-header">
-        <a className="brand" href="#top" aria-label="PickPulse home">
-          <span className="brand-mark" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span>PICKPULSE</span>
-        </a>
-        <div className="header-note">
-          <span className="privacy-dot" />
-          Audio stays on this device
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-pulse" />
+          PICKPULSE
+        </div>
+        <div className={`input-status ${inputStatus}`}>
+          <span />
+          {statusLabel}
         </div>
       </header>
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <p className="eyebrow">REAL-TIME PICK ANALYSIS</p>
-          <h1>
-            Find the tempo
-            <span>hiding in your hands.</span>
-          </h1>
-          <p className="hero-intro">
-            Play a steady phrase and PickPulse turns each guitar attack into a
-            clear BPM reading. It is already set for your eighth-note practice
-            at 100 BPM.
-          </p>
-          <div className="hero-facts">
-            <span>
-              <strong>01</strong> Plug in or use your mic
-            </span>
-            <span>
-              <strong>02</strong> Pick evenly
-            </span>
-            <span>
-              <strong>03</strong> Read your tempo
-            </span>
+      <section className="transport" aria-label="Metronome controls">
+        <div className="bpm-control">
+          <span className="control-label">METRONOME</span>
+          <div className="bpm-stepper">
+            <button
+              type="button"
+              onClick={() => setTargetBpm((value) => clampBpm(value - 1))}
+              aria-label="Decrease BPM"
+            >
+              −
+            </button>
+            <label>
+              <input
+                type="number"
+                min="30"
+                max="240"
+                value={targetBpm}
+                onChange={(event) =>
+                  setTargetBpm(clampBpm(Number(event.target.value) || 30))
+                }
+                aria-label="Metronome BPM"
+              />
+              <small>BPM</small>
+            </label>
+            <button
+              type="button"
+              onClick={() => setTargetBpm((value) => clampBpm(value + 1))}
+              aria-label="Increase BPM"
+            >
+              +
+            </button>
           </div>
         </div>
 
-        <section
-          className={`tempo-console ${attackFlash ? "attack-flash" : ""}`}
-          aria-live="polite"
-          aria-label="Live tempo reading"
-        >
-          <div className="console-topline">
-            <div className="live-state">
-              <span className={status === "listening" ? "live-dot" : ""} />
-              {statusCopy}
-            </div>
-            <label className="target-control">
-              <span>Target</span>
-              <input
-                type="number"
-                min="40"
-                max="220"
-                value={targetBpm}
-                onChange={(event) =>
-                  setTargetBpm(
-                    Math.max(40, Math.min(220, Number(event.target.value) || 40)),
-                  )
-                }
-                aria-label="Target BPM"
-              />
-              <span>BPM</span>
-            </label>
-          </div>
-
-          <div className="tempo-readout">
-            <div className="bpm-value">
-              {bpm === null ? <span className="waiting-mark">—</span> : bpm.toFixed(1)}
-            </div>
-            <div className="bpm-unit">BPM</div>
-          </div>
-
-          <div className="tempo-ruler" aria-hidden="true">
-            <div className="ruler-track">
-              <span
-                className={`tempo-needle ${bpm === null ? "needle-hidden" : ""}`}
-                style={{ left: `${tempoPosition}%` }}
-              />
-            </div>
-            <div className="ruler-labels">
-              <span>40</span>
-              <span>100</span>
-              <span>160</span>
-              <span>220</span>
-            </div>
-          </div>
-
-          <div className="coaching-row">
-            <div>
-              <p className="pace-label">{paceLabel}</p>
-              <p>{coachingCopy}</p>
-            </div>
-            <div className="confidence">
-              <span>{bpm === null ? "—" : `${confidence}%`}</span>
-              confidence
-            </div>
-          </div>
-
-          <div className="timing-strip" aria-label="Recent timing consistency">
-            {(timingOffsets.length > 0 ? timingOffsets : emptyTimingBars).map(
-              (offset, index) => (
-                <span
-                  key={`${index}-${offset}`}
-                  className={bpm === null ? "timing-bar muted" : "timing-bar"}
-                  style={{
-                    height: `${24 + (index % 3) * 8}px`,
-                    transform: `translateY(${offset * 13}px)`,
-                  }}
-                />
-              ),
-            )}
-            <i className="timing-center" />
-          </div>
-        </section>
-      </section>
-
-      <section className="control-deck" id="setup">
-        <div className="control-block subdivision-control">
-          <div className="control-heading">
-            <span className="control-number">A</span>
-            <div>
-              <p>What are you playing?</p>
-              <small>This tells the app how picks relate to the beat.</small>
-            </div>
-          </div>
-          <div className="segmented-control" aria-label="Note subdivision">
+        <div className="subdivision-control">
+          <span className="control-label">YOU PLAY</span>
+          <div className="segments">
             {subdivisions.map((item) => (
               <button
                 key={item.value}
@@ -430,146 +487,168 @@ export default function Home() {
                 aria-pressed={attacksPerBeat === item.value}
                 onClick={() => setAttacksPerBeat(item.value)}
               >
-                <span>{item.label}</span>
-                <small>{item.count}</small>
+                {item.label}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="control-block sensitivity-control">
-          <div className="control-heading">
-            <span className="control-number">B</span>
-            <div>
-              <p>Input sensitivity</p>
-              <small>Raise it for quiet picking; lower it in a noisy room.</small>
-            </div>
+        <div className="volume-control">
+          <div>
+            <span className="control-label">CLICK VOLUME</span>
+            <output>{clickVolume === 100 ? "MAX" : `${clickVolume}%`}</output>
           </div>
-          <div className="slider-row">
-            <span>Less</span>
-            <input
-              type="range"
-              min="1"
-              max="10"
-              value={sensitivity}
-              onChange={(event) => setSensitivity(Number(event.target.value))}
-              aria-label="Input sensitivity"
-            />
-            <output>{sensitivity}</output>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={clickVolume}
+            onChange={(event) => setClickVolume(Number(event.target.value))}
+            aria-label="Metronome click volume"
+          />
+        </div>
+
+        <button
+          type="button"
+          className={`session-button ${sessionRunning ? "stop" : ""}`}
+          onClick={sessionRunning ? stopSession : startSession}
+        >
+          <span>{sessionRunning ? "■" : "▶"}</span>
+          {sessionRunning ? "STOP" : "START"}
+        </button>
+      </section>
+
+      <section className="beat-row" aria-label="Four beat metronome">
+        {[0, 1, 2, 3].map((beat) => (
+          <span
+            key={beat}
+            className={`${activeBeat === beat ? "active" : ""} ${
+              beat === 0 ? "accent" : ""
+            }`}
+          />
+        ))}
+      </section>
+
+      <section className="readouts">
+        <article className="readout-card">
+          <span className="control-label">YOUR PLAYING</span>
+          <div className="primary-number">
+            {detectedBpm === null ? "—" : detectedBpm.toFixed(1)}
+            <small>BPM</small>
           </div>
-          <div className="input-meter" aria-label="Input signal level">
-            {meterSegments.map((segment) => (
-              <span
-                key={segment}
-                className={
-                  segment / meterSegments.length < inputLevel ? "active" : ""
-                }
-              />
-            ))}
+          <p>
+            {detectedBpm === null
+              ? "Play four steady notes"
+              : `${confidence}% confidence · ${attackCount} picks`}
+          </p>
+        </article>
+
+        <article className={`readout-card timing ${timingWord.toLowerCase().replace(" ", "-")}`}>
+          <span className="control-label">LATEST HIT</span>
+          <div className="primary-number">
+            {latestError === null
+              ? "—"
+              : `${latestError > 0 ? "+" : ""}${Math.round(latestError)}`}
+            <small>MS</small>
           </div>
-          <div className="meter-caption">
-            <span>Input signal</span>
-            <span>{attackCount} attacks found</span>
+          <p>{timingWord}</p>
+        </article>
+      </section>
+
+      <section className="error-panel" aria-label="Early and late timing graph">
+        <div className="error-heading">
+          <div>
+            <span className="control-label">TIMING ERROR</span>
+            <h1>EARLY / LATE</h1>
+          </div>
+          <div className="input-meter">
+            <span>INPUT</span>
+            <i>
+              <b style={{ width: `${inputLevel * 100}%` }} />
+            </i>
           </div>
         </div>
 
-        <div className="action-block">
-          <button
-            type="button"
-            className={
-              status === "listening" ? "listen-button stop" : "listen-button"
-            }
-            onClick={
-              status === "listening" || status === "starting"
-                ? stopListening
-                : startListening
-            }
-            disabled={status === "starting"}
-          >
-            <span className="button-icon" aria-hidden="true">
-              {status === "listening" ? "■" : "●"}
-            </span>
-            {status === "starting"
-              ? "Connecting…"
-              : status === "listening"
-                ? "Stop listening"
-                : "Start listening"}
-          </button>
-          <button
-            type="button"
-            className="tap-button"
-            onClick={() => registerOnset(performance.now())}
-          >
-            Tap test
-          </button>
-          <p>
-            Current mode: <strong>{selectedSubdivision.label} notes</strong>
-          </p>
+        <div className="error-scale">
+          <span>−100 ms</span>
+          <span>−50</span>
+          <span className="zero">0</span>
+          <span>+50</span>
+          <span>+100 ms</span>
         </div>
+        <div className="error-lane">
+          <div className="perfect-zone" />
+          <div className="center-line" />
+          {timingHits.map((hit, index) => {
+            const position =
+              50 + Math.max(-1, Math.min(1, hit.errorMs / 100)) * 50;
+            const age = timingHits.length - 1 - index;
+            return (
+              <span
+                key={hit.id}
+                className="hit-marker"
+                style={{
+                  left: `${position}%`,
+                  opacity: Math.max(0.18, 1 - age * 0.035),
+                  height: `${age === 0 ? 58 : 36}px`,
+                }}
+                title={`${Math.round(hit.errorMs)} ms`}
+              />
+            );
+          })}
+          {timingHits.length === 0 && (
+            <p>Hits will appear here when you play</p>
+          )}
+        </div>
+
+        <div className="stats-row">
+          <div>
+            <span>AVG ERROR</span>
+            <strong>
+              {timingStats ? `${Math.round(timingStats.averageAbsolute)} ms` : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>BIAS</span>
+            <strong>
+              {timingStats
+                ? `${timingStats.bias > 0 ? "+" : ""}${Math.round(
+                    timingStats.bias,
+                  )} ms`
+                : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>WITHIN ±30 MS</span>
+            <strong>{timingStats ? `${timingStats.onTime}%` : "—"}</strong>
+          </div>
+          <button type="button" onClick={resetMeasurements}>
+            CLEAR
+          </button>
+        </div>
+      </section>
+
+      <section className="utility-row">
+        <label>
+          <span>SENSITIVITY</span>
+          <input
+            type="range"
+            min="1"
+            max="10"
+            value={sensitivity}
+            onChange={(event) => setSensitivity(Number(event.target.value))}
+          />
+          <output>{sensitivity}</output>
+        </label>
+        <p>Use headphones or a direct guitar input so the mic does not hear the click.</p>
+        <p className="privacy">Audio never leaves your device.</p>
       </section>
 
       {errorMessage && (
         <div className="error-message" role="alert">
-          <span>!</span>
-          <p>{errorMessage}</p>
+          {errorMessage}
         </div>
       )}
-
-      <section className="explanation">
-        <div className="explanation-title">
-          <p className="eyebrow">THE IMPORTANT BIT</p>
-          <h2>BPM needs musical context.</h2>
-        </div>
-        <div className="explanation-copy">
-          <p>
-            A microphone can hear the time between picks, but it cannot know
-            whether each pick is a quarter, eighth, or sixteenth note. That is
-            why the subdivision setting matters.
-          </p>
-          <div className="math-card">
-            <span>At 100 BPM</span>
-            <strong>eighth notes land every 300 ms</strong>
-            <small>2 picks per beat · 200 pick attacks per minute</small>
-          </div>
-        </div>
-      </section>
-
-      <section className="practice-notes">
-        <article>
-          <span>01</span>
-          <h3>Give it four clean picks</h3>
-          <p>
-            The first few attacks establish the pulse. The reading becomes
-            steadier as you keep playing.
-          </p>
-        </article>
-        <article>
-          <span>02</span>
-          <h3>Mute unwanted string noise</h3>
-          <p>
-            Extra knocks and ringing strings can look like new notes. Clean
-            muting gives a cleaner result.
-          </p>
-        </article>
-        <article>
-          <span>03</span>
-          <h3>Use a direct input if possible</h3>
-          <p>
-            An audio interface gives the detector a clearer attack than a room
-            microphone, though either can work.
-          </p>
-        </article>
-      </section>
-
-      <footer>
-        <a className="brand footer-brand" href="#top">
-          PICKPULSE
-        </a>
-        <p>No recording. No upload. Just your timing.</p>
-        <button type="button" onClick={resetSession}>
-          Reset session
-        </button>
-      </footer>
     </main>
   );
 }

@@ -43,3 +43,5 @@ next-env.d.ts
 /.npm-cache/
 /.codex-dev.*.log
 /.codex-dev.pid
+/desktop-dist/
+/release/

@@ -1,0 +1,16 @@
+appId: com.pickpulse.timing
+productName: PickPulse
+asar: true
+directories:
+  output: release
+files:
+  - desktop/main.cjs
+  - desktop-dist/**/*
+  - package.json
+  - "!node_modules/**/*"
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: PickPulse-${version}-portable.${ext}

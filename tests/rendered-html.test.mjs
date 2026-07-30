@@ -28,10 +28,10 @@ test("server-renders the guitar tempo detector", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>PickPulse — Live Guitar BPM Detector<\/title>/i);
-  assert.match(html, /Find the tempo/);
-  assert.match(html, /Start listening/);
-  assert.match(html, /Eighth/);
-  assert.match(html, /At 100 BPM/);
+  assert.match(html, /<title>PickPulse — Guitar Timing Trainer<\/title>/i);
+  assert.match(html, /METRONOME/);
+  assert.match(html, /TIMING ERROR/);
+  assert.match(html, /EARLY \/ LATE/);
+  assert.match(html, /START/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

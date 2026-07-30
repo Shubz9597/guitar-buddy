@@ -75,3 +75,36 @@ export function estimateTempo(intervalsMs, attacksPerBeat) {
       ),
   };
 }
+
+/**
+ * @param {number} bpm
+ * @param {number} attacksPerBeat
+ * @returns {number}
+ */
+export function subdivisionIntervalMs(bpm, attacksPerBeat) {
+  if (!Number.isFinite(bpm) || bpm <= 0) return 0;
+  if (!Number.isFinite(attacksPerBeat) || attacksPerBeat <= 0) return 0;
+  return 60000 / (bpm * attacksPerBeat);
+}
+
+/**
+ * Returns a signed error: negative is early and positive is late.
+ *
+ * @param {number} onsetMs
+ * @param {number} gridOriginMs
+ * @param {number} bpm
+ * @param {number} attacksPerBeat
+ * @returns {number}
+ */
+export function nearestTimingErrorMs(
+  onsetMs,
+  gridOriginMs,
+  bpm,
+  attacksPerBeat,
+) {
+  const intervalMs = subdivisionIntervalMs(bpm, attacksPerBeat);
+  if (intervalMs === 0) return 0;
+  const nearestStep = Math.round((onsetMs - gridOriginMs) / intervalMs);
+  const idealTimeMs = gridOriginMs + nearestStep * intervalMs;
+  return onsetMs - idealTimeMs;
+}

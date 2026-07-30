@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { estimateTempo, median } from "../app/tempo-engine.js";
+import {
+  estimateTempo,
+  median,
+  nearestTimingErrorMs,
+  subdivisionIntervalMs,
+} from "../app/tempo-engine.js";
 
 test("calculates a median for odd and even samples", () => {
   assert.equal(median([3, 1, 2]), 2);
@@ -27,4 +32,16 @@ test("uses the selected musical subdivision", () => {
   assert.ok(quarterNotes);
   assert.ok(eighthNotes);
   assert.equal(quarterNotes.bpm, eighthNotes.bpm);
+});
+
+test("calculates the selected subdivision grid", () => {
+  assert.equal(subdivisionIntervalMs(100, 1), 600);
+  assert.equal(subdivisionIntervalMs(100, 2), 300);
+  assert.equal(subdivisionIntervalMs(100, 4), 150);
+});
+
+test("reports signed early and late timing errors", () => {
+  assert.equal(nearestTimingErrorMs(1288, 1000, 100, 2), -12);
+  assert.equal(nearestTimingErrorMs(1318, 1000, 100, 2), 18);
+  assert.equal(nearestTimingErrorMs(1595, 1000, 100, 2), -5);
 });
