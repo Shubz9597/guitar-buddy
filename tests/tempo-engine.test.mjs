@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createClickPattern,
+  cycleStepState,
   estimateTempo,
   median,
   nearestTimingErrorMs,
@@ -44,4 +46,16 @@ test("reports signed early and late timing errors", () => {
   assert.equal(nearestTimingErrorMs(1288, 1000, 100, 2), -12);
   assert.equal(nearestTimingErrorMs(1318, 1000, 100, 2), 18);
   assert.equal(nearestTimingErrorMs(1595, 1000, 100, 2), -5);
+});
+
+test("creates a click pattern for any meter and rhythm grid", () => {
+  assert.deepEqual(createClickPattern(4, 1), [2, 1, 1, 1]);
+  assert.equal(createClickPattern(3, 4).length, 12);
+  assert.deepEqual(createClickPattern(2, 3), [2, 1, 1, 1, 1, 1]);
+});
+
+test("cycles a rhythm step through normal, accent, and mute", () => {
+  assert.equal(cycleStepState(1), 2);
+  assert.equal(cycleStepState(2), 0);
+  assert.equal(cycleStepState(0), 1);
 });

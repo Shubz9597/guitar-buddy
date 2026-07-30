@@ -288,28 +288,201 @@ input:focus-visible {
   margin-right: 7px;
 }
 
-.beat-row {
-  height: 34px;
+.pattern-panel {
+  padding: 20px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pattern-toolbar {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
+  grid-template-columns: 1fr auto auto;
+  align-items: end;
+  gap: 32px;
+}
+
+.pattern-toolbar strong {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.beats-control,
+.click-grid-control {
+  display: flex;
   align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
-.beat-row span {
-  height: 3px;
-  background: #24272d;
-  transition: background 35ms linear, box-shadow 35ms linear;
+.beats-control > span,
+.click-grid-control > span {
+  margin-right: 3px;
 }
 
-.beat-row span.active {
+.beats-control button,
+.click-grid-control button {
+  height: 30px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.beats-control button {
+  width: 30px;
+  font-size: 15px;
+}
+
+.beats-control output {
+  min-width: 22px;
+  color: var(--lime);
+  font-size: 14px;
+  text-align: center;
+}
+
+.click-grid-control > div {
+  display: flex;
+  gap: 3px;
+}
+
+.click-grid-control button {
+  min-width: 42px;
+  padding-inline: 8px;
+  font-size: 8px;
+}
+
+.click-grid-control button.selected {
+  border-color: var(--lime);
   background: var(--lime);
-  box-shadow: 0 0 18px rgba(202, 255, 61, 0.6);
+  color: var(--bg);
 }
 
-.beat-row span.active.accent {
-  background: var(--orange);
-  box-shadow: 0 0 18px rgba(255, 91, 39, 0.65);
+.pattern-scroll {
+  margin-top: 18px;
+  overflow-x: auto;
+  scrollbar-color: var(--line) transparent;
+  scrollbar-width: thin;
+}
+
+.pattern-grid {
+  min-width: 100%;
+  display: grid;
+  gap: 4px;
+}
+
+.pattern-grid button {
+  height: 58px;
+  position: relative;
+  display: flex;
+  cursor: pointer;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  background: #17191e;
+  color: var(--muted);
+  transition:
+    background 70ms linear,
+    border-color 70ms linear,
+    transform 70ms linear;
+}
+
+.pattern-grid button.beat-start {
+  border-left-color: #575d68;
+}
+
+.pattern-grid button > span {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.pattern-grid button > small {
+  color: #616671;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+}
+
+.pattern-grid button.normal > span {
+  color: var(--lime);
+}
+
+.pattern-grid button.accent {
+  border-color: rgba(255, 91, 39, 0.52);
+  background: rgba(255, 91, 39, 0.1);
+}
+
+.pattern-grid button.accent > span {
+  color: var(--orange);
+}
+
+.pattern-grid button.muted {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0,
+      transparent 5px,
+      rgba(255, 255, 255, 0.025) 5px,
+      rgba(255, 255, 255, 0.025) 8px
+    ),
+    #101216;
+}
+
+.pattern-grid button.muted > span {
+  color: #515660;
+}
+
+.pattern-grid button.active {
+  z-index: 1;
+  border-color: white;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.16);
+  transform: translateY(-2px);
+}
+
+.pattern-grid button.active.accent {
+  border-color: var(--orange);
+  box-shadow: 0 0 20px rgba(255, 91, 39, 0.35);
+}
+
+.pattern-grid button.active.normal {
+  border-color: var(--lime);
+  box-shadow: 0 0 20px rgba(202, 255, 61, 0.26);
+}
+
+.pattern-help {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 15px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pattern-help p {
+  margin: 0 auto 0 0;
+}
+
+.pattern-help .normal {
+  color: var(--lime);
+}
+
+.pattern-help .accent {
+  color: var(--orange);
+}
+
+.pattern-help .muted {
+  color: #717781;
 }
 
 .readouts {
@@ -578,6 +751,14 @@ input:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .pattern-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pattern-toolbar > div:first-child {
+    grid-column: 1 / -1;
+  }
+
   .utility-row {
     grid-template-columns: 1fr;
     gap: 14px;
@@ -611,6 +792,36 @@ input:focus-visible {
 
   .segments button {
     flex: 1;
+  }
+
+  .pattern-toolbar {
+    display: block;
+  }
+
+  .beats-control,
+  .click-grid-control {
+    margin-top: 14px;
+  }
+
+  .click-grid-control {
+    display: block;
+  }
+
+  .click-grid-control > div {
+    margin-top: 8px;
+  }
+
+  .click-grid-control button {
+    flex: 1;
+  }
+
+  .pattern-help {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .pattern-help p {
+    width: 100%;
   }
 
   .readout-card {

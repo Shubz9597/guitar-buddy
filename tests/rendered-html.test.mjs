@@ -32,6 +32,9 @@ test("server-renders the guitar tempo detector", async () => {
   assert.match(html, /METRONOME/);
   assert.match(html, /TIMING ERROR/);
   assert.match(html, /EARLY \/ LATE/);
+  assert.match(html, /RHYTHM PATTERN/);
+  assert.match(html, /BEATS \/ BAR/);
+  assert.match(html, /CLICK GRID/);
   assert.match(html, /START/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

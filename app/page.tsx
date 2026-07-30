@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createClickPattern,
+  cycleStepState,
   estimateTempo,
   nearestTimingErrorMs,
   subdivisionIntervalMs,
@@ -9,10 +11,18 @@ import {
 
 type InputStatus = "idle" | "starting" | "listening" | "error";
 type TimingHit = { id: number; errorMs: number };
+type StepState = 0 | 1 | 2;
 
 const subdivisions = [
   { value: 1, label: "1/4" },
   { value: 2, label: "1/8" },
+  { value: 4, label: "1/16" },
+];
+
+const clickDivisions = [
+  { value: 1, label: "1/4" },
+  { value: 2, label: "1/8" },
+  { value: 3, label: "1/8T" },
   { value: 4, label: "1/16" },
 ];
 
@@ -22,6 +32,11 @@ const clampBpm = (value: number) =>
 export default function Home() {
   const [targetBpm, setTargetBpm] = useState(100);
   const [attacksPerBeat, setAttacksPerBeat] = useState(2);
+  const [beatsPerBar, setBeatsPerBar] = useState(4);
+  const [clicksPerBeat, setClicksPerBeat] = useState(1);
+  const [clickPattern, setClickPattern] = useState<StepState[]>(
+    () => createClickPattern(4, 1) as StepState[],
+  );
   const [clickVolume, setClickVolume] = useState(100);
   const [sensitivity, setSensitivity] = useState(7);
   const [sessionRunning, setSessionRunning] = useState(false);
@@ -33,7 +48,7 @@ export default function Home() {
   const [attackCount, setAttackCount] = useState(0);
   const [timingHits, setTimingHits] = useState<TimingHit[]>([]);
   const [latestError, setLatestError] = useState<number | null>(null);
-  const [activeBeat, setActiveBeat] = useState(-1);
+  const [activeStep, setActiveStep] = useState(-1);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const clickBufferRef = useRef<AudioBuffer | null>(null);
@@ -42,13 +57,15 @@ export default function Home() {
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulseTimersRef = useRef<Set<number>>(new Set());
   const nextClickTimeRef = useRef(0);
-  const beatIndexRef = useRef(0);
+  const stepIndexRef = useRef(0);
   const gridOriginMsRef = useRef<number | null>(null);
   const intervalsRef = useRef<number[]>([]);
   const lastOnsetRef = useRef<number | null>(null);
   const lastDetectedAtRef = useRef(0);
   const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
+  const clicksPerBeatRef = useRef(clicksPerBeat);
+  const clickPatternRef = useRef<StepState[]>(clickPattern);
   const clickVolumeRef = useRef(clickVolume / 100);
   const sensitivityRef = useRef(sensitivity);
   const sessionRunningRef = useRef(false);
@@ -81,12 +98,31 @@ export default function Home() {
       const restartAt = context.currentTime + 0.12;
       nextClickTimeRef.current = restartAt;
       gridOriginMsRef.current = restartAt * 1000;
-      beatIndexRef.current = 0;
-      setActiveBeat(-1);
+      stepIndexRef.current = 0;
+      setActiveStep(-1);
       setTimingHits([]);
       setLatestError(null);
     }
   }, [attacksPerBeat, targetBpm]);
+
+  useEffect(() => {
+    clicksPerBeatRef.current = clicksPerBeat;
+    const nextPattern = createClickPattern(
+      beatsPerBar,
+      clicksPerBeat,
+    ) as StepState[];
+    clickPatternRef.current = nextPattern;
+    setClickPattern(nextPattern);
+
+    const context = audioContextRef.current;
+    if (sessionRunningRef.current && context) {
+      const restartAt = context.currentTime + 0.12;
+      nextClickTimeRef.current = restartAt;
+      gridOriginMsRef.current = restartAt * 1000;
+      stepIndexRef.current = 0;
+      setActiveStep(-1);
+    }
+  }, [beatsPerBar, clicksPerBeat]);
 
   useEffect(() => {
     clickVolumeRef.current = clickVolume / 100;
@@ -145,47 +181,60 @@ export default function Home() {
   }, []);
 
   const scheduleClick = useCallback(
-    (context: AudioContext, time: number, beat: number) => {
+    (
+      context: AudioContext,
+      time: number,
+      step: number,
+      stepState: StepState,
+    ) => {
       const buffer = clickBufferRef.current;
       if (!buffer) return;
 
-      const source = context.createBufferSource();
-      const filter = context.createBiquadFilter();
-      const gain = context.createGain();
-      const oscillator = context.createOscillator();
-      const oscillatorGain = context.createGain();
-      const accent = beat === 0;
-      const volume = clickVolumeRef.current;
+      if (stepState !== 0) {
+        const source = context.createBufferSource();
+        const filter = context.createBiquadFilter();
+        const gain = context.createGain();
+        const oscillator = context.createOscillator();
+        const oscillatorGain = context.createGain();
+        const accent = stepState === 2;
+        const volume = clickVolumeRef.current;
 
-      source.buffer = buffer;
-      filter.type = "bandpass";
-      filter.frequency.setValueAtTime(accent ? 3600 : 2600, time);
-      filter.Q.setValueAtTime(0.8, time);
-      gain.gain.setValueAtTime(Math.max(0.0001, volume * 0.92), time);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.055);
+        source.buffer = buffer;
+        filter.type = "bandpass";
+        filter.frequency.setValueAtTime(accent ? 3900 : 2600, time);
+        filter.Q.setValueAtTime(0.8, time);
+        gain.gain.setValueAtTime(
+          Math.max(0.0001, volume * (accent ? 1 : 0.72)),
+          time,
+        );
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.055);
 
-      oscillator.type = "square";
-      oscillator.frequency.setValueAtTime(accent ? 1850 : 1320, time);
-      oscillatorGain.gain.setValueAtTime(
-        Math.max(0.0001, volume * (accent ? 0.5 : 0.36)),
-        time,
-      );
-      oscillatorGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
+        oscillator.type = "square";
+        oscillator.frequency.setValueAtTime(accent ? 2050 : 1320, time);
+        oscillatorGain.gain.setValueAtTime(
+          Math.max(0.0001, volume * (accent ? 0.55 : 0.3)),
+          time,
+        );
+        oscillatorGain.gain.exponentialRampToValueAtTime(
+          0.0001,
+          time + 0.045,
+        );
 
-      source.connect(filter);
-      filter.connect(gain);
-      gain.connect(context.destination);
-      oscillator.connect(oscillatorGain);
-      oscillatorGain.connect(context.destination);
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(context.destination);
+        oscillator.connect(oscillatorGain);
+        oscillatorGain.connect(context.destination);
 
-      source.start(time);
-      source.stop(time + 0.06);
-      oscillator.start(time);
-      oscillator.stop(time + 0.05);
+        source.start(time);
+        source.stop(time + 0.06);
+        oscillator.start(time);
+        oscillator.stop(time + 0.05);
+      }
 
       const delay = Math.max(0, (time - context.currentTime) * 1000);
       const timer = window.setTimeout(() => {
-        setActiveBeat(beat);
+        setActiveStep(step);
         pulseTimersRef.current.delete(timer);
       }, delay);
       pulseTimersRef.current.add(timer);
@@ -198,13 +247,17 @@ export default function Home() {
     if (!context || !sessionRunningRef.current) return;
 
     while (nextClickTimeRef.current < context.currentTime + 0.12) {
+      const pattern = clickPatternRef.current;
+      const step = stepIndexRef.current % pattern.length;
       scheduleClick(
         context,
         nextClickTimeRef.current,
-        beatIndexRef.current,
+        step,
+        pattern[step],
       );
-      nextClickTimeRef.current += 60 / targetBpmRef.current;
-      beatIndexRef.current = (beatIndexRef.current + 1) % 4;
+      nextClickTimeRef.current +=
+        60 / (targetBpmRef.current * clicksPerBeatRef.current);
+      stepIndexRef.current = (step + 1) % pattern.length;
     }
   }, [scheduleClick]);
 
@@ -234,7 +287,7 @@ export default function Home() {
     setSessionRunning(false);
     setInputStatus("idle");
     setInputLevel(0);
-    setActiveBeat(-1);
+    setActiveStep(-1);
   }, []);
 
   const startInputAnalysis = useCallback(
@@ -372,7 +425,7 @@ export default function Home() {
     const firstClickAt = context.currentTime + 0.16;
     nextClickTimeRef.current = firstClickAt;
     gridOriginMsRef.current = firstClickAt * 1000;
-    beatIndexRef.current = 0;
+    stepIndexRef.current = 0;
     runScheduler();
     schedulerRef.current = setInterval(runScheduler, 25);
 
@@ -428,6 +481,15 @@ export default function Home() {
         : inputStatus === "error"
           ? "Metronome only"
           : "Stopped";
+
+  const cyclePatternStep = (index: number) => {
+    setClickPattern((current) => {
+      const next = [...current] as StepState[];
+      next[index] = cycleStepState(next[index]) as StepState;
+      clickPatternRef.current = next;
+      return next;
+    });
+  };
 
   return (
     <main className="app-shell">
@@ -518,15 +580,101 @@ export default function Home() {
         </button>
       </section>
 
-      <section className="beat-row" aria-label="Four beat metronome">
-        {[0, 1, 2, 3].map((beat) => (
-          <span
-            key={beat}
-            className={`${activeBeat === beat ? "active" : ""} ${
-              beat === 0 ? "accent" : ""
-            }`}
-          />
-        ))}
+      <section className="pattern-panel" aria-label="Metronome rhythm pattern">
+        <div className="pattern-toolbar">
+          <div>
+            <span className="control-label">RHYTHM PATTERN</span>
+            <strong>
+              {beatsPerBar} beats · {clickPattern.length} steps
+            </strong>
+          </div>
+
+          <div className="beats-control">
+            <span>BEATS / BAR</span>
+            <button
+              type="button"
+              onClick={() =>
+                setBeatsPerBar((value) => Math.max(1, value - 1))
+              }
+              aria-label="Remove one beat from the bar"
+            >
+              −
+            </button>
+            <output>{beatsPerBar}</output>
+            <button
+              type="button"
+              onClick={() =>
+                setBeatsPerBar((value) => Math.min(12, value + 1))
+              }
+              aria-label="Add one beat to the bar"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="click-grid-control">
+            <span>CLICK GRID</span>
+            <div>
+              {clickDivisions.map((division) => (
+                <button
+                  key={division.value}
+                  type="button"
+                  className={
+                    clicksPerBeat === division.value ? "selected" : ""
+                  }
+                  aria-pressed={clicksPerBeat === division.value}
+                  onClick={() => setClicksPerBeat(division.value)}
+                >
+                  {division.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="pattern-scroll">
+          <div
+            className="pattern-grid"
+            style={{
+              gridTemplateColumns: `repeat(${clickPattern.length}, minmax(34px, 1fr))`,
+            }}
+          >
+            {clickPattern.map((stepState, index) => {
+              const stateName =
+                stepState === 2
+                  ? "accent"
+                  : stepState === 0
+                    ? "muted"
+                    : "normal";
+              const isBeatStart = index % clicksPerBeat === 0;
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  className={`${stateName} ${
+                    activeStep === index ? "active" : ""
+                  } ${isBeatStart ? "beat-start" : ""}`}
+                  onClick={() => cyclePatternStep(index)}
+                  aria-label={`Step ${index + 1}, ${stateName}. Click to change.`}
+                >
+                  <span>
+                    {stepState === 2 ? "A" : stepState === 0 ? "×" : "•"}
+                  </span>
+                  <small>
+                    {isBeatStart ? Math.floor(index / clicksPerBeat) + 1 : "·"}
+                  </small>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="pattern-help">
+          <p>Click any step to cycle</p>
+          <span className="normal">● Normal</span>
+          <span className="accent">● Accent</span>
+          <span className="muted">× Mute</span>
+        </div>
       </section>
 
       <section className="readouts">

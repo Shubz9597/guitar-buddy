@@ -108,3 +108,29 @@ export function nearestTimingErrorMs(
   const idealTimeMs = gridOriginMs + nearestStep * intervalMs;
   return onsetMs - idealTimeMs;
 }
+
+/**
+ * Step states: 0 = muted, 1 = normal, 2 = accent.
+ *
+ * @param {number} beatsPerBar
+ * @param {number} clicksPerBeat
+ * @returns {number[]}
+ */
+export function createClickPattern(beatsPerBar, clicksPerBeat) {
+  const beats = Math.max(1, Math.min(12, Math.round(beatsPerBar)));
+  const clicks = Math.max(1, Math.min(4, Math.round(clicksPerBeat)));
+  return Array.from(
+    { length: beats * clicks },
+    (_unused, index) => (index === 0 ? 2 : 1),
+  );
+}
+
+/**
+ * @param {number} state
+ * @returns {number}
+ */
+export function cycleStepState(state) {
+  if (state === 1) return 2;
+  if (state === 2) return 0;
+  return 1;
+}
