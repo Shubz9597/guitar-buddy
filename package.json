@@ -12,6 +12,7 @@
     "start": "vinext start",
     "build:desktop": "vite build --config vite.desktop.config.ts",
     "package:windows": "npm run build:desktop && electron-builder --win portable --x64",
+    "package:installer": "npm run build:desktop && electron-builder --win nsis --x64",
     "test": "npm run build && node --test \"tests/*.test.mjs\"",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

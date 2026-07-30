@@ -1,6 +1,7 @@
 appId: com.pickpulse.timing
 productName: PickPulse
 asar: true
+compression: maximum
 directories:
   output: release
 files:
@@ -14,3 +15,11 @@ win:
       arch:
         - x64
   artifactName: PickPulse-${version}-portable.${ext}
+nsis:
+  artifactName: PickPulse-Setup-${version}.${ext}
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PickPulse
+  runAfterFinish: true
