@@ -212,6 +212,15 @@ input:focus-visible {
   color: var(--bg);
 }
 
+.subdivision-hint {
+  display: block;
+  margin-top: 8px;
+  color: #6f747e;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .volume-control > div {
   display: flex;
   justify-content: space-between;

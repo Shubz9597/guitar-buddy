@@ -6,6 +6,8 @@ import {
   createClickPattern,
   cycleStepState,
   estimateTempo,
+  isLikelyEffectRepeat,
+  minimumAttackSpacingMs,
   nearestTimingErrorMs,
   parseBpmDraft,
   subdivisionIntervalMs,
@@ -63,6 +65,7 @@ export default function Home() {
   const gridOriginMsRef = useRef<number | null>(null);
   const intervalsRef = useRef<number[]>([]);
   const lastOnsetRef = useRef<number | null>(null);
+  const lastOnsetStrengthRef = useRef(0);
   const lastDetectedAtRef = useRef(0);
   const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
@@ -77,6 +80,7 @@ export default function Home() {
   const resetMeasurements = useCallback(() => {
     intervalsRef.current = [];
     lastOnsetRef.current = null;
+    lastOnsetStrengthRef.current = 0;
     lastDetectedAtRef.current = 0;
     hitIdRef.current = 0;
     setDetectedBpm(null);
@@ -154,7 +158,7 @@ export default function Home() {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
 
-  const registerOnset = useCallback((timeMs: number) => {
+  const registerOnset = useCallback((timeMs: number, strength: number) => {
     const expectedInterval = subdivisionIntervalMs(
       targetBpmRef.current,
       attacksPerBeatRef.current,
@@ -165,13 +169,24 @@ export default function Home() {
     lastDetectedAtRef.current = timeMs;
 
     const previousOnset = lastOnsetRef.current;
-    const duplicateWindowMs = Math.max(
-      refractoryMs,
-      Math.min(70, expectedInterval * 0.5),
+    const duplicateWindowMs = minimumAttackSpacingMs(
+      targetBpmRef.current,
+      attacksPerBeatRef.current,
     );
     if (
       previousOnset !== null &&
       timeMs - previousOnset < duplicateWindowMs
+    ) {
+      return;
+    }
+    if (
+      previousOnset !== null &&
+      isLikelyEffectRepeat(
+        timeMs - previousOnset,
+        expectedInterval,
+        strength,
+        lastOnsetStrengthRef.current,
+      )
     ) {
       return;
     }
@@ -192,6 +207,7 @@ export default function Home() {
     }
 
     lastOnsetRef.current = timeMs;
+    lastOnsetStrengthRef.current = strength;
     if (previousOnset === null) return;
 
     const interval = timeMs - previousOnset;
@@ -350,7 +366,7 @@ export default function Home() {
       const analyser = context.createAnalyser();
 
       highPass.type = "highpass";
-      highPass.frequency.value = 75;
+      highPass.frequency.value = 120;
       highPass.Q.value = 0.7;
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.08;
@@ -393,10 +409,10 @@ export default function Home() {
       const previousSpectrum = new Uint8Array(analyser.frequencyBinCount);
       const waveform = new Float32Array(analyser.fftSize);
       const binWidth = context.sampleRate / analyser.fftSize;
-      const firstBin = Math.max(1, Math.floor(80 / binWidth));
+      const firstBin = Math.max(1, Math.floor(450 / binWidth));
       const lastBin = Math.min(
         analyser.frequencyBinCount - 1,
-        Math.ceil(5000 / binWidth),
+        Math.ceil(6500 / binWidth),
       );
       const startedAt = context.currentTime;
       let hasPreviousFrame = false;
@@ -458,7 +474,9 @@ export default function Home() {
           spectralFlux > fluxThreshold &&
           rms > minimumRms
         ) {
-          registerOnset(nowMs);
+          const onsetStrength =
+            spectralFlux * Math.sqrt(Math.max(rms, 0.00001));
+          registerOnset(nowMs, onsetStrength);
         }
 
         animationFrameRef.current = requestAnimationFrame(analyse);
@@ -652,6 +670,13 @@ export default function Home() {
               </button>
             ))}
           </div>
+          <small className="subdivision-hint">
+            {attacksPerBeat} picks / beat -{" "}
+            {Math.round(
+              subdivisionIntervalMs(targetBpm, attacksPerBeat),
+            )}{" "}
+            ms apart
+          </small>
         </div>
 
         <div className="volume-control">
@@ -887,7 +912,10 @@ export default function Home() {
           />
           <output>{sensitivity}</output>
         </label>
-        <p>Use headphones or a direct guitar input so the mic does not hear the click.</p>
+        <p>
+          Use headphones. A dry/direct guitar signal is most accurate; FX repeat
+          guard is automatic.
+        </p>
         <p className="privacy">
           Latency correction: âˆ’{latencyCompensationMs} ms Â· Audio never leaves
           your device.

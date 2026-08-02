@@ -102,6 +102,64 @@ export function subdivisionIntervalMs(bpm, attacksPerBeat) {
 }
 
 /**
+ * Minimum gap between accepted guitar attacks while coaching against a target.
+ * Guitar strings often create a weaker second transient after the real pick;
+ * allowing only 65% of the selected note interval rejects that ringing while
+ * leaving generous room for a beginner to play early.
+ *
+ * @param {number} bpm
+ * @param {number} attacksPerBeat
+ * @returns {number}
+ */
+export function minimumAttackSpacingMs(bpm, attacksPerBeat) {
+  const expectedInterval = subdivisionIntervalMs(bpm, attacksPerBeat);
+  if (expectedInterval === 0) return 42;
+  return Math.max(42, Math.min(220, expectedInterval * 0.65));
+}
+
+/**
+ * Delay, reverb, and compression can produce a quieter copy of a real attack.
+ * Treat a substantially weaker transient inside the musical repeat window as
+ * an effect repeat. Real notes with similar strength remain eligible.
+ *
+ * @param {number} intervalMs
+ * @param {number} expectedIntervalMs
+ * @param {number} currentStrength
+ * @param {number} previousStrength
+ * @returns {boolean}
+ */
+export function isLikelyEffectRepeat(
+  intervalMs,
+  expectedIntervalMs,
+  currentStrength,
+  previousStrength,
+) {
+  if (
+    !Number.isFinite(intervalMs) ||
+    !Number.isFinite(expectedIntervalMs) ||
+    !Number.isFinite(currentStrength) ||
+    !Number.isFinite(previousStrength) ||
+    intervalMs <= 0 ||
+    expectedIntervalMs <= 0 ||
+    currentStrength < 0 ||
+    previousStrength <= 0
+  ) {
+    return false;
+  }
+
+  const repeatWindowMs = Math.max(
+    600,
+    Math.min(1200, expectedIntervalMs * 3),
+  );
+  const fadingStrengthRatio =
+    0.45 * (1 - 0.45 * Math.min(1, intervalMs / repeatWindowMs));
+  return (
+    intervalMs < repeatWindowMs &&
+    currentStrength < previousStrength * fadingStrengthRatio
+  );
+}
+
+/**
  * Returns a signed error: negative is early and positive is late.
  *
  * @param {number} onsetMs

@@ -5,7 +5,9 @@ import {
   createClickPattern,
   cycleStepState,
   estimateTempo,
+  isLikelyEffectRepeat,
   median,
+  minimumAttackSpacingMs,
   nearestTimingErrorMs,
   parseBpmDraft,
   subdivisionIntervalMs,
@@ -60,6 +62,19 @@ test("does not fold genuine double-speed sixteenths back to the target", () => {
   const estimate = estimateTempo([75, 75, 75, 75, 75, 75], 4, 100);
   assert.ok(estimate);
   assert.equal(estimate.bpm, 200);
+});
+
+test("guards slow sixteenths against a second transient from one pick", () => {
+  assert.equal(subdivisionIntervalMs(50, 4), 300);
+  assert.equal(minimumAttackSpacingMs(50, 4), 195);
+  assert.ok(160 < minimumAttackSpacingMs(50, 4));
+  assert.ok(300 > minimumAttackSpacingMs(50, 4));
+});
+
+test("rejects a weak effect repeat but keeps a new full-strength pick", () => {
+  assert.equal(isLikelyEffectRepeat(300, 300, 0.3, 1), true);
+  assert.equal(isLikelyEffectRepeat(300, 300, 0.8, 1), false);
+  assert.equal(isLikelyEffectRepeat(1000, 300, 0.3, 1), false);
 });
 
 test("calculates the selected subdivision grid", () => {
