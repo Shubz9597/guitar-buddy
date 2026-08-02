@@ -38,6 +38,30 @@ test("uses the selected musical subdivision", () => {
   assert.equal(quarterNotes.bpm, eighthNotes.bpm);
 });
 
+test("reads 150 ms sixteenth notes as 100 BPM", () => {
+  const estimate = estimateTempo([150, 150, 150, 150, 150, 150], 4, 100);
+  assert.ok(estimate);
+  assert.equal(estimate.bpm, 100);
+  assert.equal(estimate.confidence, 100);
+});
+
+test("keeps sixteenth-note BPM when several attacks are missed", () => {
+  const estimate = estimateTempo(
+    [151, 299, 150, 450, 148, 602, 302, 897],
+    4,
+    100,
+  );
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 100) < 1);
+  assert.ok(estimate.confidence >= 90);
+});
+
+test("does not fold genuine double-speed sixteenths back to the target", () => {
+  const estimate = estimateTempo([75, 75, 75, 75, 75, 75], 4, 100);
+  assert.ok(estimate);
+  assert.equal(estimate.bpm, 200);
+});
+
 test("calculates the selected subdivision grid", () => {
   assert.equal(subdivisionIntervalMs(100, 1), 600);
   assert.equal(subdivisionIntervalMs(100, 2), 300);

@@ -49,9 +49,11 @@ export default function Home() {
   const [timingHits, setTimingHits] = useState<TimingHit[]>([]);
   const [latestError, setLatestError] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState(-1);
+  const [latencyCompensationMs, setLatencyCompensationMs] = useState(0);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const clickBufferRef = useRef<AudioBuffer | null>(null);
+  const clickOutputRef = useRef<AudioNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -70,6 +72,7 @@ export default function Home() {
   const sensitivityRef = useRef(sensitivity);
   const sessionRunningRef = useRef(false);
   const hitIdRef = useRef(0);
+  const latencyCompensationMsRef = useRef(0);
 
   const resetMeasurements = useCallback(() => {
     intervalsRef.current = [];
@@ -102,7 +105,11 @@ export default function Home() {
     targetBpmRef.current = targetBpm;
     attacksPerBeatRef.current = attacksPerBeat;
 
-    const estimate = estimateTempo(intervalsRef.current, attacksPerBeat);
+    const estimate = estimateTempo(
+      intervalsRef.current,
+      attacksPerBeat,
+      targetBpm,
+    );
     if (estimate) {
       setDetectedBpm(estimate.bpm);
       setConfidence(estimate.confidence);
@@ -156,12 +163,25 @@ export default function Home() {
 
     if (timeMs - lastDetectedAtRef.current < refractoryMs) return;
     lastDetectedAtRef.current = timeMs;
+
+    const previousOnset = lastOnsetRef.current;
+    const duplicateWindowMs = Math.max(
+      refractoryMs,
+      Math.min(70, expectedInterval * 0.5),
+    );
+    if (
+      previousOnset !== null &&
+      timeMs - previousOnset < duplicateWindowMs
+    ) {
+      return;
+    }
+
     setAttackCount((count) => count + 1);
 
     const gridOriginMs = gridOriginMsRef.current;
     if (sessionRunningRef.current && gridOriginMs !== null) {
       const errorMs = nearestTimingErrorMs(
-        timeMs,
+        timeMs - latencyCompensationMsRef.current,
         gridOriginMs,
         targetBpmRef.current,
         attacksPerBeatRef.current,
@@ -171,7 +191,6 @@ export default function Home() {
       setTimingHits((hits) => [...hits, hit].slice(-28));
     }
 
-    const previousOnset = lastOnsetRef.current;
     lastOnsetRef.current = timeMs;
     if (previousOnset === null) return;
 
@@ -188,6 +207,7 @@ export default function Home() {
     const estimate = estimateTempo(
       intervalsRef.current,
       attacksPerBeatRef.current,
+      targetBpmRef.current,
     );
     if (estimate) {
       setDetectedBpm(estimate.bpm);
@@ -204,6 +224,7 @@ export default function Home() {
     ) => {
       const buffer = clickBufferRef.current;
       if (!buffer) return;
+      const clickOutput = clickOutputRef.current ?? context.destination;
 
       if (stepState !== 0) {
         const source = context.createBufferSource();
@@ -216,18 +237,18 @@ export default function Home() {
 
         source.buffer = buffer;
         filter.type = "bandpass";
-        filter.frequency.setValueAtTime(accent ? 3900 : 2600, time);
-        filter.Q.setValueAtTime(0.8, time);
+        filter.frequency.setValueAtTime(accent ? 4300 : 3100, time);
+        filter.Q.setValueAtTime(0.7, time);
         gain.gain.setValueAtTime(
-          Math.max(0.0001, volume * (accent ? 1 : 0.72)),
+          Math.max(0.0001, volume * (accent ? 1.05 : 0.82)),
           time,
         );
-        gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.055);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.065);
 
         oscillator.type = "square";
-        oscillator.frequency.setValueAtTime(accent ? 2050 : 1320, time);
+        oscillator.frequency.setValueAtTime(accent ? 2350 : 1650, time);
         oscillatorGain.gain.setValueAtTime(
-          Math.max(0.0001, volume * (accent ? 0.55 : 0.3)),
+          Math.max(0.0001, volume * (accent ? 0.68 : 0.45)),
           time,
         );
         oscillatorGain.gain.exponentialRampToValueAtTime(
@@ -237,12 +258,12 @@ export default function Home() {
 
         source.connect(filter);
         filter.connect(gain);
-        gain.connect(context.destination);
+        gain.connect(clickOutput);
         oscillator.connect(oscillatorGain);
-        oscillatorGain.connect(context.destination);
+        oscillatorGain.connect(clickOutput);
 
         source.start(time);
-        source.stop(time + 0.06);
+        source.stop(time + 0.07);
         oscillator.start(time);
         oscillator.stop(time + 0.05);
       }
@@ -296,6 +317,7 @@ export default function Home() {
     const context = audioContextRef.current;
     audioContextRef.current = null;
     clickBufferRef.current = null;
+    clickOutputRef.current = null;
     if (context && context.state !== "closed") void context.close();
 
     gridOriginMsRef.current = null;
@@ -335,6 +357,37 @@ export default function Home() {
       source.connect(highPass);
       highPass.connect(analyser);
       streamRef.current = stream;
+
+      const trackSettings = stream.getAudioTracks()[0]?.getSettings() as
+        | (MediaTrackSettings & { latency?: number })
+        | undefined;
+      const reportedInputLatency = trackSettings?.latency;
+      const inputLatency =
+        Number.isFinite(reportedInputLatency) && reportedInputLatency! > 0
+          ? reportedInputLatency!
+          : 0;
+      const contextWithOutputLatency = context as AudioContext & {
+        outputLatency?: number;
+      };
+      const reportedOutputLatency = contextWithOutputLatency.outputLatency;
+      const outputLatency =
+        Number.isFinite(reportedOutputLatency) && reportedOutputLatency! > 0
+          ? reportedOutputLatency!
+          : Math.max(0, context.baseLatency || 0);
+      const analyserLatency = analyser.fftSize / context.sampleRate / 4;
+      const frameLatency = 0.008;
+      const measuredLatencyMs = Math.round(
+        Math.max(
+          0,
+          Math.min(
+            120,
+            (inputLatency + outputLatency + analyserLatency + frameLatency) *
+              1000,
+          ),
+        ),
+      );
+      latencyCompensationMsRef.current = measuredLatencyMs;
+      setLatencyCompensationMs(measuredLatencyMs);
 
       const spectrum = new Uint8Array(analyser.frequencyBinCount);
       const previousSpectrum = new Uint8Array(analyser.frequencyBinCount);
@@ -425,6 +478,24 @@ export default function Home() {
     const context = new AudioContext({ latencyHint: "interactive" });
     audioContextRef.current = context;
     await context.resume();
+
+    const clickBus = context.createGain();
+    const clickLimiter = context.createDynamicsCompressor();
+    const clickMakeup = context.createGain();
+    clickBus.gain.value = 1.45;
+    clickLimiter.threshold.value = -5;
+    clickLimiter.knee.value = 0;
+    clickLimiter.ratio.value = 20;
+    clickLimiter.attack.value = 0.001;
+    clickLimiter.release.value = 0.055;
+    clickMakeup.gain.value = 1.08;
+    clickBus.connect(clickLimiter);
+    clickLimiter.connect(clickMakeup);
+    clickMakeup.connect(context.destination);
+    clickOutputRef.current = clickBus;
+
+    latencyCompensationMsRef.current = 0;
+    setLatencyCompensationMs(0);
 
     const bufferLength = Math.floor(context.sampleRate * 0.055);
     const clickBuffer = context.createBuffer(1, bufferLength, context.sampleRate);
@@ -817,7 +888,10 @@ export default function Home() {
           <output>{sensitivity}</output>
         </label>
         <p>Use headphones or a direct guitar input so the mic does not hear the click.</p>
-        <p className="privacy">Audio never leaves your device.</p>
+        <p className="privacy">
+          Latency correction: âˆ’{latencyCompensationMs} ms Â· Audio never leaves
+          your device.
+        </p>
       </section>
 
       {errorMessage && (

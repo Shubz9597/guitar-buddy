@@ -25,22 +25,36 @@ export function median(values) {
 /**
  * @param {number[]} intervalsMs
  * @param {number} attacksPerBeat
+ * @param {number} [referenceBpm]
  * @returns {TempoEstimate | null}
  */
-export function estimateTempo(intervalsMs, attacksPerBeat) {
+export function estimateTempo(intervalsMs, attacksPerBeat, referenceBpm) {
   const valid = intervalsMs.filter(
     (interval) => Number.isFinite(interval) && interval >= 60 && interval <= 3000,
   );
 
   if (valid.length === 0 || attacksPerBeat <= 0) return null;
 
-  const initialCenter = median(valid);
+  const referenceInterval = subdivisionIntervalMs(
+    Number(referenceBpm),
+    attacksPerBeat,
+  );
+  const initialCenter = referenceInterval || median(valid);
   const normalized = valid.map((interval) => {
-    if (interval > initialCenter * 1.55 && interval < initialCenter * 2.45) {
-      return interval / 2;
+    const missedAttacks = Math.round(interval / initialCenter);
+    if (
+      missedAttacks >= 2 &&
+      missedAttacks <= 8 &&
+      Math.abs(interval / missedAttacks - initialCenter) <= initialCenter * 0.45
+    ) {
+      return interval / missedAttacks;
     }
 
-    if (interval < initialCenter * 0.68 && interval * 2 < initialCenter * 1.45) {
+    if (
+      !referenceInterval &&
+      interval < initialCenter * 0.68 &&
+      interval * 2 < initialCenter * 1.45
+    ) {
       return interval * 2;
     }
 
