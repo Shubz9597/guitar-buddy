@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clampBpm,
   createClickPattern,
   cycleStepState,
   estimateTempo,
   median,
   nearestTimingErrorMs,
+  parseBpmDraft,
   subdivisionIntervalMs,
 } from "../app/tempo-engine.js";
 
@@ -58,4 +60,12 @@ test("cycles a rhythm step through normal, accent, and mute", () => {
   assert.equal(cycleStepState(1), 2);
   assert.equal(cycleStepState(2), 0);
   assert.equal(cycleStepState(0), 1);
+});
+
+test("commits BPM text only after normal typing is complete", () => {
+  assert.equal(parseBpmDraft("120", 100), 120);
+  assert.equal(parseBpmDraft("", 100), 100);
+  assert.equal(parseBpmDraft("1", 100), 30);
+  assert.equal(parseBpmDraft("500", 100), 240);
+  assert.equal(clampBpm(99.6), 100);
 });

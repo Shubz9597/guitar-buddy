@@ -134,3 +134,25 @@ export function cycleStepState(state) {
   if (state === 2) return 0;
   return 1;
 }
+
+/**
+ * @param {number} value
+ * @returns {number}
+ */
+export function clampBpm(value) {
+  return Math.max(30, Math.min(240, Math.round(value)));
+}
+
+/**
+ * Allows the UI to keep an empty or partial text draft while typing, then
+ * validates it only when the edit is committed.
+ *
+ * @param {string} draft
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function parseBpmDraft(draft, fallback) {
+  const trimmed = String(draft).trim();
+  if (!/^\d+$/.test(trimmed)) return clampBpm(fallback);
+  return clampBpm(Number(trimmed));
+}

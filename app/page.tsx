@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  clampBpm,
   createClickPattern,
   cycleStepState,
   estimateTempo,
   nearestTimingErrorMs,
+  parseBpmDraft,
   subdivisionIntervalMs,
 } from "./tempo-engine";
 
@@ -26,11 +28,9 @@ const clickDivisions = [
   { value: 4, label: "1/16" },
 ];
 
-const clampBpm = (value: number) =>
-  Math.max(30, Math.min(240, Math.round(value)));
-
 export default function Home() {
   const [targetBpm, setTargetBpm] = useState(100);
+  const [bpmDraft, setBpmDraft] = useState("100");
   const [attacksPerBeat, setAttacksPerBeat] = useState(2);
   const [beatsPerBar, setBeatsPerBar] = useState(4);
   const [clicksPerBeat, setClicksPerBeat] = useState(1);
@@ -82,6 +82,21 @@ export default function Home() {
     setTimingHits([]);
     setLatestError(null);
   }, []);
+
+  const commitBpmDraft = useCallback(() => {
+    const nextBpm = parseBpmDraft(bpmDraft, targetBpm);
+    setTargetBpm(nextBpm);
+    setBpmDraft(String(nextBpm));
+  }, [bpmDraft, targetBpm]);
+
+  const stepBpm = useCallback(
+    (amount: number) => {
+      const nextBpm = clampBpm(targetBpm + amount);
+      setTargetBpm(nextBpm);
+      setBpmDraft(String(nextBpm));
+    },
+    [targetBpm],
+  );
 
   useEffect(() => {
     targetBpmRef.current = targetBpm;
@@ -510,27 +525,40 @@ export default function Home() {
           <div className="bpm-stepper">
             <button
               type="button"
-              onClick={() => setTargetBpm((value) => clampBpm(value - 1))}
+              onClick={() => stepBpm(-1)}
               aria-label="Decrease BPM"
             >
               −
             </button>
             <label>
               <input
-                type="number"
-                min="30"
-                max="240"
-                value={targetBpm}
-                onChange={(event) =>
-                  setTargetBpm(clampBpm(Number(event.target.value) || 30))
-                }
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={3}
+                value={bpmDraft}
+                onChange={(event) => {
+                  const nextDraft = event.target.value;
+                  if (/^\d{0,3}$/.test(nextDraft)) setBpmDraft(nextDraft);
+                }}
+                onBlur={commitBpmDraft}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitBpmDraft();
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === "Escape") {
+                    setBpmDraft(String(targetBpm));
+                    event.currentTarget.blur();
+                  }
+                }}
                 aria-label="Metronome BPM"
               />
               <small>BPM</small>
             </label>
             <button
               type="button"
-              onClick={() => setTargetBpm((value) => clampBpm(value + 1))}
+              onClick={() => stepBpm(1)}
               aria-label="Increase BPM"
             >
               +
