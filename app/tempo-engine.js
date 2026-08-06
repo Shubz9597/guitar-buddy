@@ -40,14 +40,14 @@ export function estimateTempo(intervalsMs, attacksPerBeat, referenceBpm) {
     attacksPerBeat,
   );
   const initialCenter = referenceInterval || median(valid);
-  const normalized = valid.map((interval) => {
+  const normalizedSamples = valid.map((interval) => {
     const missedAttacks = Math.round(interval / initialCenter);
     if (
       missedAttacks >= 2 &&
       missedAttacks <= 8 &&
       Math.abs(interval / missedAttacks - initialCenter) <= initialCenter * 0.45
     ) {
-      return interval / missedAttacks;
+      return { interval: interval / missedAttacks, weight: missedAttacks };
     }
 
     if (
@@ -55,19 +55,29 @@ export function estimateTempo(intervalsMs, attacksPerBeat, referenceBpm) {
       interval < initialCenter * 0.68 &&
       interval * 2 < initialCenter * 1.45
     ) {
-      return interval * 2;
+      return { interval: interval * 2, weight: 1 };
     }
 
-    return interval;
+    return { interval, weight: 1 };
   });
 
-  const center = median(normalized);
-  const inliers = normalized.filter(
-    (interval) => Math.abs(interval - center) <= center * 0.35,
+  const center = median(normalizedSamples.map((sample) => sample.interval));
+  const inlierCenter = referenceInterval || center;
+  const inlierTolerance = inlierCenter * (referenceInterval ? 0.45 : 0.35);
+  const inliers = normalizedSamples.filter(
+    (sample) =>
+      Math.abs(sample.interval - inlierCenter) <= inlierTolerance,
   );
-  const usable = inliers.length > 0 ? inliers : normalized;
-  const intervalMs = median(usable);
-  const deviations = usable.map((interval) => Math.abs(interval - intervalMs));
+  const usable = inliers.length > 0 ? inliers : normalizedSamples;
+  const totalWeight = usable.reduce((sum, sample) => sum + sample.weight, 0);
+  const intervalMs =
+    usable.reduce(
+      (sum, sample) => sum + sample.interval * sample.weight,
+      0,
+    ) / totalWeight;
+  const deviations = usable.map((sample) =>
+    Math.abs(sample.interval - intervalMs),
+  );
   const medianDeviation = median(deviations);
   const stability = Math.max(
     0,
@@ -84,8 +94,14 @@ export function estimateTempo(intervalsMs, attacksPerBeat, referenceBpm) {
     intervalMs,
     offsets: usable
       .slice(-9)
-      .map((interval) =>
-        Math.max(-1, Math.min(1, (interval - intervalMs) / (intervalMs * 0.2))),
+      .map((sample) =>
+        Math.max(
+          -1,
+          Math.min(
+            1,
+            (sample.interval - intervalMs) / (intervalMs * 0.2),
+          ),
+        ),
       ),
   };
 }

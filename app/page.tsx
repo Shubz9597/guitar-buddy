@@ -219,7 +219,7 @@ export default function Home() {
     }
 
     if (interval < 35) return;
-    intervalsRef.current = [...intervalsRef.current, interval].slice(-14);
+    intervalsRef.current = [...intervalsRef.current, interval].slice(-24);
     const estimate = estimateTempo(
       intervalsRef.current,
       attacksPerBeatRef.current,

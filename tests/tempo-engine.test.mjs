@@ -32,6 +32,12 @@ test("tolerates timing jitter and one missed attack", () => {
   assert.ok(estimate.confidence >= 90);
 });
 
+test("does not turn a short rushing cluster into a persistent high BPM", () => {
+  const estimate = estimateTempo([280, 280, 280, 280, 380], 4, 50);
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 50) < 0.1);
+});
+
 test("uses the selected musical subdivision", () => {
   const quarterNotes = estimateTempo([600, 600, 600, 600], 1);
   const eighthNotes = estimateTempo([300, 300, 300, 300], 2);
