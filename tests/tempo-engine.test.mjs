@@ -95,9 +95,16 @@ test("does not fold genuine double-speed sixteenths back to the target", () => {
 
 test("guards slow sixteenths against a second transient from one pick", () => {
   assert.equal(subdivisionIntervalMs(50, 4), 300);
-  assert.equal(minimumAttackSpacingMs(50, 4), 195);
+  assert.equal(minimumAttackSpacingMs(50, 4), 210);
   assert.ok(160 < minimumAttackSpacingMs(50, 4));
   assert.ok(300 > minimumAttackSpacingMs(50, 4));
+});
+
+test("rejects delayed REAPER transients for every practice subdivision", () => {
+  assert.equal(minimumAttackSpacingMs(50, 1), 840);
+  assert.equal(minimumAttackSpacingMs(50, 2), 420);
+  assert.equal(minimumAttackSpacingMs(50, 3), 280);
+  assert.equal(minimumAttackSpacingMs(50, 4), 210);
 });
 
 test("rejects a weak effect repeat but keeps a new full-strength pick", () => {

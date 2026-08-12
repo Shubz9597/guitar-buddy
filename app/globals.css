@@ -789,7 +789,7 @@ select:focus-visible {
 .utility-row {
   min-height: 76px;
   display: grid;
-  grid-template-columns: 210px 1fr auto;
+  grid-template-columns: 180px 225px 1fr auto;
   align-items: center;
   gap: 28px;
   color: var(--muted);
@@ -802,6 +802,14 @@ select:focus-visible {
   grid-template-columns: auto 1fr 18px;
   align-items: center;
   gap: 9px;
+}
+
+.utility-row .latency-control {
+  grid-template-columns: auto 1fr 42px;
+}
+
+.utility-row .latency-control output {
+  white-space: nowrap;
 }
 
 .utility-row label > span {

@@ -79,6 +79,7 @@ export default function Home() {
   const [latestError, setLatestError] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState(-1);
   const [latencyCompensationMs, setLatencyCompensationMs] = useState(0);
+  const [dawLatencyMs, setDawLatencyMs] = useState(0);
   const [audioInputs, setAudioInputs] = useState<AudioRouteDevice[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<AudioRouteDevice[]>([]);
   const [inputDeviceId, setInputDeviceId] = useState("");
@@ -91,7 +92,7 @@ export default function Home() {
   const clickBufferRef = useRef<AudioBuffer | null>(null);
   const clickOutputRef = useRef<AudioNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
+  const analysisTimerRef = useRef<number | null>(null);
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulseTimersRef = useRef<Set<number>>(new Set());
   const nextClickTimeRef = useRef(0);
@@ -111,6 +112,7 @@ export default function Home() {
   const sessionRunningRef = useRef(false);
   const hitIdRef = useRef(0);
   const latencyCompensationMsRef = useRef(0);
+  const dawLatencyMsRef = useRef(0);
   const inputDeviceIdRef = useRef("");
   const outputDeviceIdRef = useRef("");
 
@@ -248,6 +250,10 @@ export default function Home() {
   }, [sensitivity]);
 
   useEffect(() => {
+    dawLatencyMsRef.current = dawLatencyMs;
+  }, [dawLatencyMs]);
+
+  useEffect(() => {
     inputDeviceIdRef.current = inputDeviceId;
   }, [inputDeviceId]);
 
@@ -304,7 +310,7 @@ export default function Home() {
     const gridOriginMs = gridOriginMsRef.current;
     if (sessionRunningRef.current && gridOriginMs !== null) {
       const errorMs = nearestTimingErrorMs(
-        timeMs - latencyCompensationMsRef.current,
+        timeMs - latencyCompensationMsRef.current - dawLatencyMsRef.current,
         gridOriginMs,
         targetBpmRef.current,
         attacksPerBeatRef.current,
@@ -426,9 +432,9 @@ export default function Home() {
 
   const stopInputAnalysis = useCallback(() => {
     analysisRunRef.current += 1;
-    if (animationFrameRef.current !== null) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
+    if (analysisTimerRef.current !== null) {
+      clearInterval(analysisTimerRef.current);
+      analysisTimerRef.current = null;
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
@@ -610,11 +616,11 @@ export default function Home() {
           registerOnset(nowMs, onsetStrength);
         }
 
-        animationFrameRef.current = requestAnimationFrame(analyse);
       };
 
       setInputStatus("listening");
-      animationFrameRef.current = requestAnimationFrame(analyse);
+      analyse();
+      analysisTimerRef.current = window.setInterval(analyse, 8);
     },
     [refreshAudioDevices, registerOnset, stopInputAnalysis],
   );
@@ -1186,13 +1192,31 @@ export default function Home() {
           />
           <output>{sensitivity}</output>
         </label>
+        <label className="latency-control">
+          <span>EXTRA DAW LATENCY</span>
+          <input
+            type="range"
+            min="0"
+            max="500"
+            step="1"
+            value={dawLatencyMs}
+            onChange={(event) => {
+              const nextLatency = Number(event.target.value);
+              setDawLatencyMs(nextLatency);
+              dawLatencyMsRef.current = nextLatency;
+              setTimingHits([]);
+              setLatestError(null);
+            }}
+            aria-label="Additional REAPER or DAW latency compensation"
+          />
+          <output>{dawLatencyMs} ms</output>
+        </label>
         <p>
-          Use headphones. A dry/direct guitar signal is most accurate; FX repeat
-          guard is automatic.
+          Extra latency moves only the early/late graph. It never changes the
+          detected BPM.
         </p>
         <p className="privacy">
-          Latency correction: âˆ’{latencyCompensationMs} ms Â· Audio never leaves
-          your device.
+          Auto correction: -{latencyCompensationMs} ms - Audio stays on device.
         </p>
       </section>
 

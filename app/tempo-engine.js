@@ -131,8 +131,8 @@ export function clickIntervalSeconds(bpm, clicksPerBeat) {
 /**
  * Minimum gap between accepted guitar attacks while coaching against a target.
  * Guitar strings often create a weaker second transient after the real pick;
- * allowing only 65% of the selected note interval rejects that ringing while
- * leaving generous room for a beginner to play early.
+ * ignoring the first 70% of the selected note interval rejects delayed DAW,
+ * compressor, and effect transients while leaving room for a beginner to rush.
  *
  * @param {number} bpm
  * @param {number} attacksPerBeat
@@ -141,7 +141,7 @@ export function clickIntervalSeconds(bpm, clicksPerBeat) {
 export function minimumAttackSpacingMs(bpm, attacksPerBeat) {
   const expectedInterval = subdivisionIntervalMs(bpm, attacksPerBeat);
   if (expectedInterval === 0) return 42;
-  return Math.max(42, Math.min(220, expectedInterval * 0.65));
+  return Math.max(42, Math.min(1400, expectedInterval * 0.7));
 }
 
 /**
