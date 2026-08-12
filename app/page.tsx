@@ -16,10 +16,29 @@ import {
 type InputStatus = "idle" | "starting" | "listening" | "error";
 type TimingHit = { id: number; errorMs: number };
 type StepState = 0 | 1 | 2;
+type AudioRouteDevice = { deviceId: string; label: string };
+
+type OutputSelectableAudioContext = AudioContext & {
+  setSinkId?: (sinkId: string) => Promise<void>;
+};
+
+async function routeContextOutput(
+  context: AudioContext,
+  deviceId: string,
+) {
+  const selectableContext = context as OutputSelectableAudioContext;
+  if (typeof selectableContext.setSinkId !== "function") {
+    return deviceId === "";
+  }
+
+  await selectableContext.setSinkId(deviceId);
+  return true;
+}
 
 const subdivisions = [
   { value: 1, label: "1/4" },
   { value: 2, label: "1/8" },
+  { value: 3, label: "1/3" },
   { value: 4, label: "1/16" },
 ];
 
@@ -29,6 +48,13 @@ const clickDivisions = [
   { value: 3, label: "1/8T" },
   { value: 4, label: "1/16" },
 ];
+
+const bpmCountLabels: Record<number, string> = {
+  1: "pick",
+  2: "2nd pick",
+  3: "3rd pick",
+  4: "4th pick",
+};
 
 export default function Home() {
   const [targetBpm, setTargetBpm] = useState(100);
@@ -52,6 +78,13 @@ export default function Home() {
   const [latestError, setLatestError] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState(-1);
   const [latencyCompensationMs, setLatencyCompensationMs] = useState(0);
+  const [audioInputs, setAudioInputs] = useState<AudioRouteDevice[]>([]);
+  const [audioOutputs, setAudioOutputs] = useState<AudioRouteDevice[]>([]);
+  const [inputDeviceId, setInputDeviceId] = useState("");
+  const [outputDeviceId, setOutputDeviceId] = useState("");
+  const [routingMessage, setRoutingMessage] = useState(
+    "Select a dedicated guitar interface to exclude the computer microphone.",
+  );
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const clickBufferRef = useRef<AudioBuffer | null>(null);
@@ -67,6 +100,7 @@ export default function Home() {
   const lastOnsetRef = useRef<number | null>(null);
   const lastOnsetStrengthRef = useRef(0);
   const lastDetectedAtRef = useRef(0);
+  const analysisRunRef = useRef(0);
   const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
   const clicksPerBeatRef = useRef(clicksPerBeat);
@@ -76,6 +110,60 @@ export default function Home() {
   const sessionRunningRef = useRef(false);
   const hitIdRef = useRef(0);
   const latencyCompensationMsRef = useRef(0);
+  const inputDeviceIdRef = useRef("");
+  const outputDeviceIdRef = useRef("");
+
+  const refreshAudioDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const makeOptions = (
+        kind: MediaDeviceKind,
+        fallbackName: string,
+      ): AudioRouteDevice[] => {
+        const seen = new Set<string>();
+        return devices
+          .filter(
+            (device) =>
+              device.kind === kind &&
+              device.deviceId !== "default" &&
+              device.deviceId !== "communications" &&
+              !seen.has(device.deviceId),
+          )
+          .map((device, index) => {
+            seen.add(device.deviceId);
+            return {
+              deviceId: device.deviceId,
+              label: device.label || `${fallbackName} ${index + 1}`,
+            };
+          });
+      };
+
+      const inputs = makeOptions("audioinput", "Audio input");
+      const outputs = makeOptions("audiooutput", "Audio output");
+      setAudioInputs(inputs);
+      setAudioOutputs(outputs);
+      setInputDeviceId((current) => {
+        const next =
+          current === "" || inputs.some((device) => device.deviceId === current)
+            ? current
+            : "";
+        inputDeviceIdRef.current = next;
+        return next;
+      });
+      setOutputDeviceId((current) => {
+        const next =
+          current === "" || outputs.some((device) => device.deviceId === current)
+            ? current
+            : "";
+        outputDeviceIdRef.current = next;
+        return next;
+      });
+    } catch {
+      setRoutingMessage("Audio device list is unavailable on this system.");
+    }
+  }, []);
 
   const resetMeasurements = useCallback(() => {
     intervalsRef.current = [];
@@ -157,6 +245,25 @@ export default function Home() {
   useEffect(() => {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
+
+  useEffect(() => {
+    inputDeviceIdRef.current = inputDeviceId;
+  }, [inputDeviceId]);
+
+  useEffect(() => {
+    outputDeviceIdRef.current = outputDeviceId;
+  }, [outputDeviceId]);
+
+  useEffect(() => {
+    void refreshAudioDevices();
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.addEventListener) return;
+
+    const handleDeviceChange = () => void refreshAudioDevices();
+    mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () =>
+      mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+  }, [refreshAudioDevices]);
 
   const registerOnset = useCallback((timeMs: number, strength: number) => {
     const expectedInterval = subdivisionIntervalMs(
@@ -313,6 +420,17 @@ export default function Home() {
     }
   }, [scheduleClick]);
 
+  const stopInputAnalysis = useCallback(() => {
+    analysisRunRef.current += 1;
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setInputLevel(0);
+  }, []);
+
   const stopSession = useCallback(() => {
     sessionRunningRef.current = false;
 
@@ -320,15 +438,9 @@ export default function Home() {
       clearInterval(schedulerRef.current);
       schedulerRef.current = null;
     }
-    if (animationFrameRef.current !== null) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
+    stopInputAnalysis();
     pulseTimersRef.current.forEach((timer) => clearTimeout(timer));
     pulseTimersRef.current.clear();
-
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
 
     const context = audioContextRef.current;
     audioContextRef.current = null;
@@ -339,24 +451,33 @@ export default function Home() {
     gridOriginMsRef.current = null;
     setSessionRunning(false);
     setInputStatus("idle");
-    setInputLevel(0);
     setActiveStep(-1);
-  }, []);
+  }, [stopInputAnalysis]);
 
   const startInputAnalysis = useCallback(
-    async (context: AudioContext) => {
+    async (context: AudioContext, requestedDeviceId = inputDeviceIdRef.current) => {
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error("Audio input is not available in this browser.");
+        throw new Error("Audio input is not available on this system.");
       }
+
+      stopInputAnalysis();
+      const analysisRun = analysisRunRef.current;
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           autoGainControl: false,
+          channelCount: 1,
+          deviceId: requestedDeviceId
+            ? { exact: requestedDeviceId }
+            : undefined,
           echoCancellation: false,
           noiseSuppression: false,
         },
       });
-      if (!sessionRunningRef.current) {
+      if (
+        analysisRun !== analysisRunRef.current ||
+        !sessionRunningRef.current
+      ) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -373,6 +494,11 @@ export default function Home() {
       source.connect(highPass);
       highPass.connect(analyser);
       streamRef.current = stream;
+      const activeTrack = stream.getAudioTracks()[0];
+      setRoutingMessage(
+        `Guitar input: ${activeTrack?.label || "Windows default input"}`,
+      );
+      void refreshAudioDevices();
 
       const trackSettings = stream.getAudioTracks()[0]?.getSettings() as
         | (MediaTrackSettings & { latency?: number })
@@ -423,6 +549,7 @@ export default function Home() {
       const analyse = () => {
         if (
           audioContextRef.current !== context ||
+          analysisRun !== analysisRunRef.current ||
           !sessionRunningRef.current
         ) {
           return;
@@ -485,7 +612,7 @@ export default function Home() {
       setInputStatus("listening");
       animationFrameRef.current = requestAnimationFrame(analyse);
     },
-    [registerOnset],
+    [refreshAudioDevices, registerOnset, stopInputAnalysis],
   );
 
   const startSession = useCallback(async () => {
@@ -496,6 +623,22 @@ export default function Home() {
     const context = new AudioContext({ latencyHint: "interactive" });
     audioContextRef.current = context;
     await context.resume();
+
+    try {
+      const routed = await routeContextOutput(
+        context,
+        outputDeviceIdRef.current,
+      );
+      if (!routed) {
+        setRoutingMessage(
+          "This Windows audio engine cannot switch output; using the system default.",
+        );
+      }
+    } catch {
+      setRoutingMessage(
+        "Selected click output is unavailable; using the system default.",
+      );
+    }
 
     const clickBus = context.createGain();
     const clickLimiter = context.createDynamicsCompressor();
@@ -534,20 +677,91 @@ export default function Home() {
     schedulerRef.current = setInterval(runScheduler, 25);
 
     try {
-      await startInputAnalysis(context);
+      await startInputAnalysis(context, inputDeviceIdRef.current);
     } catch (error) {
       setInputStatus("error");
       if (error instanceof DOMException && error.name === "NotAllowedError") {
         setErrorMessage(
-          "Microphone access is blocked. The metronome still works; allow microphone access to measure the guitar.",
+          "Audio input access is blocked. The metronome still works; allow input access to measure the guitar.",
         );
       } else {
         setErrorMessage(
-          "No guitar input was found. The metronome is still running.",
+          "The selected guitar input is unavailable. The metronome is still running.",
         );
       }
     }
   }, [resetMeasurements, runScheduler, startInputAnalysis]);
+
+  const selectInputDevice = useCallback(
+    async (deviceId: string) => {
+      setInputDeviceId(deviceId);
+      inputDeviceIdRef.current = deviceId;
+      const context = audioContextRef.current;
+      if (!sessionRunningRef.current || !context) {
+        setRoutingMessage(
+          deviceId
+            ? "Selected guitar input will be used when you press Start."
+            : "Windows default recording input will be used when you press Start.",
+        );
+        return;
+      }
+
+      setInputStatus("starting");
+      setErrorMessage("");
+      resetMeasurements();
+      try {
+        await startInputAnalysis(context, deviceId);
+      } catch {
+        setInputStatus("error");
+        setErrorMessage("Could not open the selected guitar input.");
+      }
+    },
+    [resetMeasurements, startInputAnalysis],
+  );
+
+  const selectOutputDevice = useCallback(async (deviceId: string) => {
+    setOutputDeviceId(deviceId);
+    outputDeviceIdRef.current = deviceId;
+    const context = audioContextRef.current;
+    if (!context) {
+      setRoutingMessage(
+        deviceId
+          ? "Selected click output will be used when you press Start."
+          : "The click will use the Windows default output.",
+      );
+      return;
+    }
+
+    try {
+      const routed = await routeContextOutput(context, deviceId);
+      setRoutingMessage(
+        routed
+          ? "Metronome click output changed."
+          : "Output switching is unavailable; using the Windows default.",
+      );
+    } catch {
+      setRoutingMessage(
+        "Could not open that click output; the previous output remains active.",
+      );
+    }
+  }, []);
+
+  const scanAudioDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    setRoutingMessage("Scanning Windows and VoiceMeeter audio endpoints...");
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+      await refreshAudioDevices();
+      setRoutingMessage(
+        "Devices refreshed. For isolation, choose a VoiceMeeter B bus carrying guitar only.",
+      );
+    } catch {
+      setRoutingMessage("Audio input permission is required to show device names.");
+    }
+  }, [refreshAudioDevices]);
 
   useEffect(
     () => () => {
@@ -671,7 +885,7 @@ export default function Home() {
             ))}
           </div>
           <small className="subdivision-hint">
-            {attacksPerBeat} picks / beat -{" "}
+            BPM counts every {bpmCountLabels[attacksPerBeat]} -{" "}
             {Math.round(
               subdivisionIntervalMs(targetBpm, attacksPerBeat),
             )}{" "}
@@ -702,6 +916,56 @@ export default function Home() {
           <span>{sessionRunning ? "■" : "▶"}</span>
           {sessionRunning ? "STOP" : "START"}
         </button>
+      </section>
+
+      <section className="audio-routing" aria-label="Audio input and output routing">
+        <div className="routing-heading">
+          <div>
+            <span className="control-label">AUDIO ROUTING</span>
+            <strong>VOICEMEETER / WINDOWS DEVICES</strong>
+          </div>
+          <button type="button" onClick={scanAudioDevices}>
+            SCAN DEVICES
+          </button>
+        </div>
+
+        <div className="routing-controls">
+          <label>
+            <span>GUITAR INPUT</span>
+            <select
+              value={inputDeviceId}
+              onChange={(event) => void selectInputDevice(event.target.value)}
+              aria-label="Guitar input device"
+            >
+              <option value="">Windows default input</option>
+              {audioInputs.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label}
+                </option>
+              ))}
+            </select>
+            <small>Only this recording endpoint is analyzed.</small>
+          </label>
+
+          <label>
+            <span>CLICK OUTPUT</span>
+            <select
+              value={outputDeviceId}
+              onChange={(event) => void selectOutputDevice(event.target.value)}
+              aria-label="Metronome output device"
+            >
+              <option value="">Windows default output</option>
+              {audioOutputs.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label}
+                </option>
+              ))}
+            </select>
+            <small>The guitar is not monitored through PickPulse.</small>
+          </label>
+        </div>
+
+        <p>{routingMessage}</p>
       </section>
 
       <section className="pattern-panel" aria-label="Metronome rhythm pattern">

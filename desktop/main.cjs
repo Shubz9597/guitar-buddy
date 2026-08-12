@@ -21,7 +21,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  const allowedPermissions = new Set(["media"]);
+  const allowedPermissions = new Set(["media", "speaker-selection"]);
 
   session.defaultSession.setPermissionCheckHandler(
     (_webContents, permission) => allowedPermissions.has(permission),

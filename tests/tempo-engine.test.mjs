@@ -41,9 +41,15 @@ test("does not turn a short rushing cluster into a persistent high BPM", () => {
 test("uses the selected musical subdivision", () => {
   const quarterNotes = estimateTempo([600, 600, 600, 600], 1);
   const eighthNotes = estimateTempo([300, 300, 300, 300], 2);
+  const triplets = estimateTempo([200, 200, 200, 200], 3);
+  const sixteenths = estimateTempo([150, 150, 150, 150], 4);
   assert.ok(quarterNotes);
   assert.ok(eighthNotes);
+  assert.ok(triplets);
+  assert.ok(sixteenths);
   assert.equal(quarterNotes.bpm, eighthNotes.bpm);
+  assert.equal(quarterNotes.bpm, triplets.bpm);
+  assert.equal(quarterNotes.bpm, sixteenths.bpm);
 });
 
 test("reads 150 ms sixteenth notes as 100 BPM", () => {
