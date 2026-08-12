@@ -118,6 +118,17 @@ export function subdivisionIntervalMs(bpm, attacksPerBeat) {
 }
 
 /**
+ * Exact interval used by the audible metronome scheduler.
+ *
+ * @param {number} bpm
+ * @param {number} clicksPerBeat
+ * @returns {number}
+ */
+export function clickIntervalSeconds(bpm, clicksPerBeat) {
+  return subdivisionIntervalMs(bpm, clicksPerBeat) / 1000;
+}
+
+/**
  * Minimum gap between accepted guitar attacks while coaching against a target.
  * Guitar strings often create a weaker second transient after the real pick;
  * allowing only 65% of the selected note interval rejects that ringing while

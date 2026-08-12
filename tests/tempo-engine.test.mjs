@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clickIntervalSeconds,
   clampBpm,
   createClickPattern,
   cycleStepState,
@@ -50,6 +51,22 @@ test("uses the selected musical subdivision", () => {
   assert.equal(quarterNotes.bpm, eighthNotes.bpm);
   assert.equal(quarterNotes.bpm, triplets.bpm);
   assert.equal(quarterNotes.bpm, sixteenths.bpm);
+});
+
+test("calculates quarter and eighth note BPM correctly at 50 BPM", () => {
+  const quarterNotes = estimateTempo([1200, 1200, 1200, 1200], 1, 50);
+  const eighthNotes = estimateTempo([600, 600, 600, 600], 2, 50);
+  assert.ok(quarterNotes);
+  assert.ok(eighthNotes);
+  assert.equal(quarterNotes.bpm, 50);
+  assert.equal(eighthNotes.bpm, 50);
+});
+
+test("schedules quarter, eighth, triplet, and sixteenth clicks at 50 BPM", () => {
+  assert.equal(clickIntervalSeconds(50, 1), 1.2);
+  assert.equal(clickIntervalSeconds(50, 2), 0.6);
+  assert.equal(clickIntervalSeconds(50, 3), 0.4);
+  assert.equal(clickIntervalSeconds(50, 4), 0.3);
 });
 
 test("reads 150 ms sixteenth notes as 100 BPM", () => {

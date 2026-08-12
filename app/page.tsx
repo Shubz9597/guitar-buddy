@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  clickIntervalSeconds,
   clampBpm,
   createClickPattern,
   cycleStepState,
@@ -83,7 +84,7 @@ export default function Home() {
   const [inputDeviceId, setInputDeviceId] = useState("");
   const [outputDeviceId, setOutputDeviceId] = useState("");
   const [routingMessage, setRoutingMessage] = useState(
-    "Select a dedicated guitar interface to exclude the computer microphone.",
+    "Pick any Windows recording input. VoiceMeeter is optional.",
   );
 
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -415,7 +416,10 @@ export default function Home() {
         pattern[step],
       );
       nextClickTimeRef.current +=
-        60 / (targetBpmRef.current * clicksPerBeatRef.current);
+        clickIntervalSeconds(
+          targetBpmRef.current,
+          clicksPerBeatRef.current,
+        );
       stepIndexRef.current = (step + 1) % pattern.length;
     }
   }, [scheduleClick]);
@@ -756,7 +760,7 @@ export default function Home() {
       permissionStream.getTracks().forEach((track) => track.stop());
       await refreshAudioDevices();
       setRoutingMessage(
-        "Devices refreshed. For isolation, choose a VoiceMeeter B bus carrying guitar only.",
+        "Devices refreshed. Choose the Windows input carrying only your guitar.",
       );
     } catch {
       setRoutingMessage("Audio input permission is required to show device names.");
@@ -922,7 +926,7 @@ export default function Home() {
         <div className="routing-heading">
           <div>
             <span className="control-label">AUDIO ROUTING</span>
-            <strong>VOICEMEETER / WINDOWS DEVICES</strong>
+            <strong>WINDOWS AUDIO DEVICES</strong>
           </div>
           <button type="button" onClick={scanAudioDevices}>
             SCAN DEVICES
@@ -944,7 +948,9 @@ export default function Home() {
                 </option>
               ))}
             </select>
-            <small>Only this recording endpoint is analyzed.</small>
+            <small>
+              USB interface, USB guitar cable, line input, or VoiceMeeter bus.
+            </small>
           </label>
 
           <label>
@@ -1058,7 +1064,11 @@ export default function Home() {
         </div>
 
         <div className="pattern-help">
-          <p>Click any step to cycle</p>
+          <p>
+            {clicksPerBeat} {clicksPerBeat === 1 ? "click" : "clicks"} / beat
+            - {Math.round(clickIntervalSeconds(targetBpm, clicksPerBeat) * 1000)}
+            ms apart - click any step to cycle
+          </p>
           <span className="normal">● Normal</span>
           <span className="accent">● Accent</span>
           <span className="muted">× Mute</span>
