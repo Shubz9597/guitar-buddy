@@ -127,7 +127,7 @@ select:focus-visible {
 }
 
 .transport {
-  min-height: 148px;
+  min-height: 220px;
   display: grid;
   grid-template-columns: 1.15fr 0.8fr 1fr 150px;
   align-items: center;
@@ -211,6 +211,40 @@ select:focus-visible {
   border-color: var(--lime);
   background: var(--lime);
   color: var(--bg);
+}
+
+.mode-segments {
+  display: flex;
+  gap: 4px;
+}
+
+.mode-segments button {
+  height: 34px;
+  padding: 0 10px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.mode-segments button.selected {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.mode-hint {
+  display: block;
+  margin-top: 7px;
+  color: #6f747e;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+}
+
+.play-label {
+  margin-top: 16px;
 }
 
 .subdivision-hint {

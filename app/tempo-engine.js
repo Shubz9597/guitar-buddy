@@ -147,10 +147,37 @@ export function clickIntervalSeconds(bpm, clicksPerBeat) {
  * never depend on the practice BPM or selected subdivision, because that would
  * impose a hidden maximum on measured playing speed.
  *
+ * @param {"pick" | "rhythm"} [practiceMode]
  * @returns {number}
  */
-export function minimumAttackSpacingMs() {
-  return 42;
+export function minimumAttackSpacingMs(practiceMode = "pick") {
+  return practiceMode === "rhythm" ? 90 : 42;
+}
+
+/**
+ * A chord strum creates several closely spaced string transients. Compare each
+ * candidate with the immediately previous candidate (accepted or rejected), so
+ * the entire string-by-string burst remains one attack until there is a quiet
+ * gap. Pick mode keeps the shortest safe gap for individual-note speed.
+ *
+ * @param {number} timeMs
+ * @param {number | null} previousCandidateMs
+ * @param {"pick" | "rhythm"} practiceMode
+ * @returns {boolean}
+ */
+export function isAttackBurstStart(
+  timeMs,
+  previousCandidateMs,
+  practiceMode,
+) {
+  if (!Number.isFinite(timeMs)) return false;
+  if (previousCandidateMs === null || !Number.isFinite(previousCandidateMs)) {
+    return true;
+  }
+
+  return (
+    timeMs - previousCandidateMs >= minimumAttackSpacingMs(practiceMode)
+  );
 }
 
 /**

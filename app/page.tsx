@@ -7,8 +7,8 @@ import {
   createClickPattern,
   cycleStepState,
   estimateTempo,
+  isAttackBurstStart,
   isLikelyEffectRepeat,
-  minimumAttackSpacingMs,
   nearestTimingErrorMs,
   parseBpmDraft,
   subdivisionIntervalMs,
@@ -17,6 +17,7 @@ import {
 type InputStatus = "idle" | "starting" | "listening" | "error";
 type TimingHit = { id: number; errorMs: number };
 type StepState = 0 | 1 | 2;
+type PracticeMode = "pick" | "rhythm";
 type AudioRouteDevice = { deviceId: string; label: string };
 
 type OutputSelectableAudioContext = AudioContext & {
@@ -51,16 +52,17 @@ const clickDivisions = [
 ];
 
 const bpmCountLabels: Record<number, string> = {
-  1: "pick",
-  2: "2nd pick",
-  3: "3rd pick",
-  4: "4th pick",
+  1: "each",
+  2: "every 2nd",
+  3: "every 3rd",
+  4: "every 4th",
 };
 
 export default function Home() {
   const [targetBpm, setTargetBpm] = useState(100);
   const [bpmDraft, setBpmDraft] = useState("100");
   const [attacksPerBeat, setAttacksPerBeat] = useState(2);
+  const [practiceMode, setPracticeMode] = useState<PracticeMode>("rhythm");
   const [beatsPerBar, setBeatsPerBar] = useState(4);
   const [clicksPerBeat, setClicksPerBeat] = useState(1);
   const [clickPattern, setClickPattern] = useState<StepState[]>(
@@ -105,6 +107,7 @@ export default function Home() {
   const analysisRunRef = useRef(0);
   const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
+  const practiceModeRef = useRef<PracticeMode>(practiceMode);
   const clicksPerBeatRef = useRef(clicksPerBeat);
   const clickPatternRef = useRef<StepState[]>(clickPattern);
   const clickVolumeRef = useRef(clickVolume / 100);
@@ -269,10 +272,18 @@ export default function Home() {
   }, [refreshAudioDevices]);
 
   const registerOnset = useCallback((timeMs: number, strength: number) => {
-    const refractoryMs = minimumAttackSpacingMs();
-
-    if (timeMs - lastDetectedAtRef.current < refractoryMs) return;
+    const previousCandidateAt =
+      lastDetectedAtRef.current > 0 ? lastDetectedAtRef.current : null;
     lastDetectedAtRef.current = timeMs;
+    if (
+      !isAttackBurstStart(
+        timeMs,
+        previousCandidateAt,
+        practiceModeRef.current,
+      )
+    ) {
+      return;
+    }
 
     const previousOnset = lastOnsetRef.current;
     if (
@@ -860,7 +871,40 @@ export default function Home() {
         </div>
 
         <div className="subdivision-control">
-          <span className="control-label">YOU PLAY</span>
+          <span className="control-label">PRACTICE MODE</span>
+          <div className="mode-segments">
+            <button
+              type="button"
+              className={practiceMode === "pick" ? "selected" : ""}
+              aria-pressed={practiceMode === "pick"}
+              onClick={() => {
+                practiceModeRef.current = "pick";
+                setPracticeMode("pick");
+                resetMeasurements();
+              }}
+            >
+              PICK NOTES
+            </button>
+            <button
+              type="button"
+              className={practiceMode === "rhythm" ? "selected" : ""}
+              aria-pressed={practiceMode === "rhythm"}
+              onClick={() => {
+                practiceModeRef.current = "rhythm";
+                setPracticeMode("rhythm");
+                resetMeasurements();
+              }}
+            >
+              STRUM RHYTHM
+            </button>
+          </div>
+          <small className="mode-hint">
+            {practiceMode === "rhythm"
+              ? "One chord sweep = one strum"
+              : "Each individual note attack counts"}
+          </small>
+
+          <span className="control-label play-label">YOU PLAY</span>
           <div className="segments">
             {subdivisions.map((item) => (
               <button
@@ -875,7 +919,8 @@ export default function Home() {
             ))}
           </div>
           <small className="subdivision-hint">
-            BPM counts every {bpmCountLabels[attacksPerBeat]} -{" "}
+            BPM counts {bpmCountLabels[attacksPerBeat]}{" "}
+            {practiceMode === "rhythm" ? "strum" : "pick"} -{" "}
             {Math.round(
               subdivisionIntervalMs(targetBpm, attacksPerBeat),
             )}{" "}
@@ -1070,8 +1115,12 @@ export default function Home() {
           </div>
           <p>
             {detectedBpm === null
-              ? "Play four steady notes"
-              : `${confidence}% confidence · ${attackCount} picks`}
+              ? `Play four steady ${
+                  practiceMode === "rhythm" ? "strums" : "picks"
+                }`
+              : `${confidence}% confidence · ${attackCount} ${
+                  practiceMode === "rhythm" ? "strums" : "picks"
+                }`}
           </p>
         </article>
 

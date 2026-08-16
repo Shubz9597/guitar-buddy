@@ -6,6 +6,7 @@ import {
   createClickPattern,
   cycleStepState,
   estimateTempo,
+  isAttackBurstStart,
   isLikelyEffectRepeat,
   median,
   minimumAttackSpacingMs,
@@ -98,12 +99,32 @@ test("reports fast strumming even while the practice tempo is 60 BPM", () => {
   assert.equal(estimate.bpm, 240);
 });
 
-test("anti-double-trigger spacing never changes with target or subdivision", () => {
-  assert.equal(minimumAttackSpacingMs(50, 1), 42);
-  assert.equal(minimumAttackSpacingMs(50, 2), 42);
-  assert.equal(minimumAttackSpacingMs(50, 3), 42);
-  assert.equal(minimumAttackSpacingMs(50, 4), 42);
-  assert.equal(minimumAttackSpacingMs(240, 1), 42);
+test("uses separate burst windows for picking and rhythm strumming", () => {
+  assert.equal(minimumAttackSpacingMs("pick"), 42);
+  assert.equal(minimumAttackSpacingMs("rhythm"), 90);
+});
+
+test("groups the string transients from one chord into one rhythm strum", () => {
+  const candidates = [1000, 1028, 1059, 1090];
+  let previousCandidate = null;
+  const accepted = candidates.filter((timeMs) => {
+    const isStart = isAttackBurstStart(
+      timeMs,
+      previousCandidate,
+      "rhythm",
+    );
+    previousCandidate = timeMs;
+    return isStart;
+  });
+
+  assert.deepEqual(accepted, [1000]);
+  assert.equal(isAttackBurstStart(1200, previousCandidate, "rhythm"), true);
+  assert.equal(isAttackBurstStart(1300, 1200, "rhythm"), true);
+});
+
+test("pick mode still accepts separate fast note attacks", () => {
+  assert.equal(isAttackBurstStart(1050, 1000, "pick"), true);
+  assert.equal(isAttackBurstStart(1030, 1000, "pick"), false);
 });
 
 test("rejects a weak effect repeat but keeps a new full-strength pick", () => {
