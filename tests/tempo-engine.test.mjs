@@ -33,10 +33,10 @@ test("tolerates timing jitter and one missed attack", () => {
   assert.ok(estimate.confidence >= 90);
 });
 
-test("does not turn a short rushing cluster into a persistent high BPM", () => {
-  const estimate = estimateTempo([280, 280, 280, 280, 380], 4, 50);
+test("does not pull a rushing performance back toward the practice target", () => {
+  const estimate = estimateTempo([280, 280, 280, 280, 380], 4);
   assert.ok(estimate);
-  assert.ok(Math.abs(estimate.bpm - 50) < 0.1);
+  assert.ok(estimate.bpm > 53);
 });
 
 test("uses the selected musical subdivision", () => {
@@ -54,8 +54,8 @@ test("uses the selected musical subdivision", () => {
 });
 
 test("calculates quarter and eighth note BPM correctly at 50 BPM", () => {
-  const quarterNotes = estimateTempo([1200, 1200, 1200, 1200], 1, 50);
-  const eighthNotes = estimateTempo([600, 600, 600, 600], 2, 50);
+  const quarterNotes = estimateTempo([1200, 1200, 1200, 1200], 1);
+  const eighthNotes = estimateTempo([600, 600, 600, 600], 2);
   assert.ok(quarterNotes);
   assert.ok(eighthNotes);
   assert.equal(quarterNotes.bpm, 50);
@@ -70,7 +70,7 @@ test("schedules quarter, eighth, triplet, and sixteenth clicks at 50 BPM", () =>
 });
 
 test("reads 150 ms sixteenth notes as 100 BPM", () => {
-  const estimate = estimateTempo([150, 150, 150, 150, 150, 150], 4, 100);
+  const estimate = estimateTempo([150, 150, 150, 150, 150, 150], 4);
   assert.ok(estimate);
   assert.equal(estimate.bpm, 100);
   assert.equal(estimate.confidence, 100);
@@ -80,7 +80,6 @@ test("keeps sixteenth-note BPM when several attacks are missed", () => {
   const estimate = estimateTempo(
     [151, 299, 150, 450, 148, 602, 302, 897],
     4,
-    100,
   );
   assert.ok(estimate);
   assert.ok(Math.abs(estimate.bpm - 100) < 1);
@@ -88,29 +87,29 @@ test("keeps sixteenth-note BPM when several attacks are missed", () => {
 });
 
 test("does not fold genuine double-speed sixteenths back to the target", () => {
-  const estimate = estimateTempo([75, 75, 75, 75, 75, 75], 4, 100);
+  const estimate = estimateTempo([75, 75, 75, 75, 75, 75], 4);
   assert.ok(estimate);
   assert.equal(estimate.bpm, 200);
 });
 
-test("guards slow sixteenths against a second transient from one pick", () => {
-  assert.equal(subdivisionIntervalMs(50, 4), 300);
-  assert.equal(minimumAttackSpacingMs(50, 4), 210);
-  assert.ok(160 < minimumAttackSpacingMs(50, 4));
-  assert.ok(300 > minimumAttackSpacingMs(50, 4));
+test("reports fast strumming even while the practice tempo is 60 BPM", () => {
+  const estimate = estimateTempo([250, 250, 250, 250, 250, 250], 1);
+  assert.ok(estimate);
+  assert.equal(estimate.bpm, 240);
 });
 
-test("rejects delayed REAPER transients for every practice subdivision", () => {
-  assert.equal(minimumAttackSpacingMs(50, 1), 840);
-  assert.equal(minimumAttackSpacingMs(50, 2), 420);
-  assert.equal(minimumAttackSpacingMs(50, 3), 280);
-  assert.equal(minimumAttackSpacingMs(50, 4), 210);
+test("anti-double-trigger spacing never changes with target or subdivision", () => {
+  assert.equal(minimumAttackSpacingMs(50, 1), 42);
+  assert.equal(minimumAttackSpacingMs(50, 2), 42);
+  assert.equal(minimumAttackSpacingMs(50, 3), 42);
+  assert.equal(minimumAttackSpacingMs(50, 4), 42);
+  assert.equal(minimumAttackSpacingMs(240, 1), 42);
 });
 
 test("rejects a weak effect repeat but keeps a new full-strength pick", () => {
-  assert.equal(isLikelyEffectRepeat(300, 300, 0.3, 1), true);
-  assert.equal(isLikelyEffectRepeat(300, 300, 0.8, 1), false);
-  assert.equal(isLikelyEffectRepeat(1000, 300, 0.3, 1), false);
+  assert.equal(isLikelyEffectRepeat(300, 0.1, 1), true);
+  assert.equal(isLikelyEffectRepeat(300, 0.8, 1), false);
+  assert.equal(isLikelyEffectRepeat(1000, 0.1, 1), false);
 });
 
 test("calculates the selected subdivision grid", () => {

@@ -25,50 +25,64 @@ export function median(values) {
 /**
  * @param {number[]} intervalsMs
  * @param {number} attacksPerBeat
- * @param {number} [referenceBpm]
  * @returns {TempoEstimate | null}
  */
-export function estimateTempo(intervalsMs, attacksPerBeat, referenceBpm) {
+export function estimateTempo(intervalsMs, attacksPerBeat) {
   const valid = intervalsMs.filter(
     (interval) => Number.isFinite(interval) && interval >= 60 && interval <= 3000,
   );
 
   if (valid.length === 0 || attacksPerBeat <= 0) return null;
 
-  const referenceInterval = subdivisionIntervalMs(
-    Number(referenceBpm),
-    attacksPerBeat,
+  // Every observed interval can be one attack, or several attack periods when
+  // the player misses notes. Score all plausible base intervals from the
+  // performance itself. The metronome target is deliberately not an input:
+  // playing twice as fast must measure twice as fast.
+  const candidates = valid.flatMap((interval) =>
+    Array.from({ length: 8 }, (_unused, index) => interval / (index + 1)).filter(
+      (candidate) => candidate >= 60,
+    ),
   );
-  const initialCenter = referenceInterval || median(valid);
-  const normalizedSamples = valid.map((interval) => {
-    const missedAttacks = Math.round(interval / initialCenter);
-    if (
-      missedAttacks >= 2 &&
-      missedAttacks <= 8 &&
-      Math.abs(interval / missedAttacks - initialCenter) <= initialCenter * 0.45
-    ) {
-      return { interval: interval / missedAttacks, weight: missedAttacks };
-    }
+  const scoredCandidates = candidates.map((candidate) => {
+    const samples = valid.map((interval) => {
+      const missedAttacks = Math.max(
+        1,
+        Math.min(8, Math.round(interval / candidate)),
+      );
+      const normalizedInterval = interval / missedAttacks;
+      const relativeError =
+        Math.abs(normalizedInterval - candidate) / candidate;
+      return {
+        interval: normalizedInterval,
+        weight: missedAttacks,
+        relativeError,
+      };
+    });
+    const inliers = samples.filter((sample) => sample.relativeError <= 0.22);
 
-    if (
-      !referenceInterval &&
-      interval < initialCenter * 0.68 &&
-      interval * 2 < initialCenter * 1.45
-    ) {
-      return { interval: interval * 2, weight: 1 };
+    return {
+      candidate,
+      inliers,
+      error:
+        inliers.length > 0
+          ? median(inliers.map((sample) => sample.relativeError))
+          : Number.POSITIVE_INFINITY,
+      averageWeight:
+        inliers.length > 0
+          ? inliers.reduce((sum, sample) => sum + sample.weight, 0) /
+            inliers.length
+          : Number.POSITIVE_INFINITY,
+    };
+  });
+  scoredCandidates.sort((a, b) => {
+    if (a.inliers.length !== b.inliers.length) {
+      return b.inliers.length - a.inliers.length;
     }
-
-    return { interval, weight: 1 };
+    if (Math.abs(a.error - b.error) > 0.005) return a.error - b.error;
+    return a.averageWeight - b.averageWeight;
   });
 
-  const center = median(normalizedSamples.map((sample) => sample.interval));
-  const inlierCenter = referenceInterval || center;
-  const inlierTolerance = inlierCenter * (referenceInterval ? 0.45 : 0.35);
-  const inliers = normalizedSamples.filter(
-    (sample) =>
-      Math.abs(sample.interval - inlierCenter) <= inlierTolerance,
-  );
-  const usable = inliers.length > 0 ? inliers : normalizedSamples;
+  const usable = scoredCandidates[0].inliers;
   const totalWeight = usable.reduce((sum, sample) => sum + sample.weight, 0);
   const intervalMs =
     usable.reduce(
@@ -129,19 +143,14 @@ export function clickIntervalSeconds(bpm, clicksPerBeat) {
 }
 
 /**
- * Minimum gap between accepted guitar attacks while coaching against a target.
- * Guitar strings often create a weaker second transient after the real pick;
- * ignoring the first 70% of the selected note interval rejects delayed DAW,
- * compressor, and effect transients while leaving room for a beginner to rush.
+ * Tiny fixed guard against analysing the same physical attack twice. It must
+ * never depend on the practice BPM or selected subdivision, because that would
+ * impose a hidden maximum on measured playing speed.
  *
- * @param {number} bpm
- * @param {number} attacksPerBeat
  * @returns {number}
  */
-export function minimumAttackSpacingMs(bpm, attacksPerBeat) {
-  const expectedInterval = subdivisionIntervalMs(bpm, attacksPerBeat);
-  if (expectedInterval === 0) return 42;
-  return Math.max(42, Math.min(1400, expectedInterval * 0.7));
+export function minimumAttackSpacingMs() {
+  return 42;
 }
 
 /**
@@ -150,36 +159,29 @@ export function minimumAttackSpacingMs(bpm, attacksPerBeat) {
  * an effect repeat. Real notes with similar strength remain eligible.
  *
  * @param {number} intervalMs
- * @param {number} expectedIntervalMs
  * @param {number} currentStrength
  * @param {number} previousStrength
  * @returns {boolean}
  */
 export function isLikelyEffectRepeat(
   intervalMs,
-  expectedIntervalMs,
   currentStrength,
   previousStrength,
 ) {
   if (
     !Number.isFinite(intervalMs) ||
-    !Number.isFinite(expectedIntervalMs) ||
     !Number.isFinite(currentStrength) ||
     !Number.isFinite(previousStrength) ||
     intervalMs <= 0 ||
-    expectedIntervalMs <= 0 ||
     currentStrength < 0 ||
     previousStrength <= 0
   ) {
     return false;
   }
 
-  const repeatWindowMs = Math.max(
-    600,
-    Math.min(1200, expectedIntervalMs * 3),
-  );
+  const repeatWindowMs = 700;
   const fadingStrengthRatio =
-    0.45 * (1 - 0.45 * Math.min(1, intervalMs / repeatWindowMs));
+    0.2 * (1 - 0.35 * Math.min(1, intervalMs / repeatWindowMs));
   return (
     intervalMs < repeatWindowMs &&
     currentStrength < previousStrength * fadingStrengthRatio

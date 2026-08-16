@@ -200,11 +200,7 @@ export default function Home() {
     targetBpmRef.current = targetBpm;
     attacksPerBeatRef.current = attacksPerBeat;
 
-    const estimate = estimateTempo(
-      intervalsRef.current,
-      attacksPerBeat,
-      targetBpm,
-    );
+    const estimate = estimateTempo(intervalsRef.current, attacksPerBeat);
     if (estimate) {
       setDetectedBpm(estimate.bpm);
       setConfidence(estimate.confidence);
@@ -273,31 +269,16 @@ export default function Home() {
   }, [refreshAudioDevices]);
 
   const registerOnset = useCallback((timeMs: number, strength: number) => {
-    const expectedInterval = subdivisionIntervalMs(
-      targetBpmRef.current,
-      attacksPerBeatRef.current,
-    );
-    const refractoryMs = Math.max(42, Math.min(90, expectedInterval * 0.42));
+    const refractoryMs = minimumAttackSpacingMs();
 
     if (timeMs - lastDetectedAtRef.current < refractoryMs) return;
     lastDetectedAtRef.current = timeMs;
 
     const previousOnset = lastOnsetRef.current;
-    const duplicateWindowMs = minimumAttackSpacingMs(
-      targetBpmRef.current,
-      attacksPerBeatRef.current,
-    );
-    if (
-      previousOnset !== null &&
-      timeMs - previousOnset < duplicateWindowMs
-    ) {
-      return;
-    }
     if (
       previousOnset !== null &&
       isLikelyEffectRepeat(
         timeMs - previousOnset,
-        expectedInterval,
         strength,
         lastOnsetStrengthRef.current,
       )
@@ -337,7 +318,6 @@ export default function Home() {
     const estimate = estimateTempo(
       intervalsRef.current,
       attacksPerBeatRef.current,
-      targetBpmRef.current,
     );
     if (estimate) {
       setDetectedBpm(estimate.bpm);
