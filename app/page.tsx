@@ -9,6 +9,7 @@ import {
   estimateTempo,
   isAttackBurstStart,
   isLikelyEffectRepeat,
+  isSpectralFluxPeak,
   nearestTimingErrorMs,
   parseBpmDraft,
   subdivisionIntervalMs,
@@ -546,6 +547,14 @@ export default function Home() {
       let fluxMean = 0;
       let fluxDeviation = 0;
       let nextMeterUpdate = 0;
+      let fluxTwoFramesAgo = 0;
+      let previousFlux = 0;
+      let previousFluxThreshold = Number.POSITIVE_INFINITY;
+      let previousRms = 0;
+      let previousMinimumRms = Number.POSITIVE_INFINITY;
+      let previousFrameAtMs = 0;
+      let fluxHistoryLength = 0;
+      let onsetArmed = true;
 
       const analyse = () => {
         if (
@@ -596,17 +605,38 @@ export default function Home() {
           fluxDeviation * (3.45 - currentSensitivity * 0.22) +
           0.18;
         const minimumRms = 0.0025 + (10 - currentSensitivity) * 0.0012;
+        const rearmThreshold = fluxMean + fluxDeviation * 0.8 + 0.08;
 
-        if (
-          context.currentTime - startedAt > 0.55 &&
-          spectralFlux > fluxThreshold &&
-          rms > minimumRms
-        ) {
-          const onsetStrength =
-            spectralFlux * Math.sqrt(Math.max(rms, 0.00001));
-          registerOnset(nowMs, onsetStrength);
+        if (!onsetArmed && spectralFlux <= rearmThreshold) {
+          onsetArmed = true;
         }
 
+        if (
+          fluxHistoryLength >= 2 &&
+          onsetArmed &&
+          context.currentTime - startedAt > 0.55 &&
+          isSpectralFluxPeak(
+            fluxTwoFramesAgo,
+            previousFlux,
+            spectralFlux,
+            previousFluxThreshold,
+            previousRms,
+            previousMinimumRms,
+          )
+        ) {
+          onsetArmed = false;
+          const onsetStrength =
+            previousFlux * Math.sqrt(Math.max(previousRms, 0.00001));
+          registerOnset(previousFrameAtMs, onsetStrength);
+        }
+
+        fluxTwoFramesAgo = previousFlux;
+        previousFlux = spectralFlux;
+        previousFluxThreshold = fluxThreshold;
+        previousRms = rms;
+        previousMinimumRms = minimumRms;
+        previousFrameAtMs = nowMs;
+        fluxHistoryLength += 1;
       };
 
       setInputStatus("listening");

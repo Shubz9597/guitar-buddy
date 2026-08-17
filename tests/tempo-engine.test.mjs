@@ -8,6 +8,7 @@ import {
   estimateTempo,
   isAttackBurstStart,
   isLikelyEffectRepeat,
+  isSpectralFluxPeak,
   median,
   minimumAttackSpacingMs,
   nearestTimingErrorMs,
@@ -32,6 +33,38 @@ test("tolerates timing jitter and one missed attack", () => {
   assert.ok(estimate);
   assert.ok(Math.abs(estimate.bpm - 100) < 1);
   assert.ok(estimate.confidence >= 90);
+});
+
+test("does not invent a fast divisor for realistic 50 BPM quarter notes", () => {
+  const estimate = estimateTempo([1120, 1280, 1160, 1250, 1190], 1);
+  assert.ok(estimate);
+  assert.ok(estimate.bpm > 48 && estimate.bpm < 52);
+});
+
+test("keeps realistic 60 BPM quarter and eighth notes near 60", () => {
+  const quarterNotes = estimateTempo([930, 1060, 970, 1040, 990], 1);
+  const eighthNotes = estimateTempo([470, 530, 485, 520, 495], 2);
+  assert.ok(quarterNotes);
+  assert.ok(eighthNotes);
+  assert.ok(quarterNotes.bpm > 58 && quarterNotes.bpm < 62);
+  assert.ok(eighthNotes.bpm > 58 && eighthNotes.bpm < 62);
+});
+
+test("stays accurate across every subdivision and common practice tempo", () => {
+  const jitter = [0.93, 1.06, 0.97, 1.04, 0.99, 1.02, 0.96];
+
+  for (const expectedBpm of [40, 50, 60, 80, 100, 120, 160]) {
+    for (const attacksPerBeat of [1, 2, 3, 4]) {
+      const idealInterval = 60000 / (expectedBpm * attacksPerBeat);
+      const intervals = jitter.map((factor) => idealInterval * factor);
+      const estimate = estimateTempo(intervals, attacksPerBeat);
+      assert.ok(estimate);
+      assert.ok(
+        Math.abs(estimate.bpm - expectedBpm) / expectedBpm < 0.03,
+        `${expectedBpm} BPM at ${attacksPerBeat} attacks/beat became ${estimate.bpm}`,
+      );
+    }
+  }
 });
 
 test("does not pull a rushing performance back toward the practice target", () => {
@@ -125,6 +158,13 @@ test("groups the string transients from one chord into one rhythm strum", () => 
 test("pick mode still accepts separate fast note attacks", () => {
   assert.equal(isAttackBurstStart(1050, 1000, "pick"), true);
   assert.equal(isAttackBurstStart(1030, 1000, "pick"), false);
+});
+
+test("emits an onset candidate only at a spectral-flux peak", () => {
+  assert.equal(isSpectralFluxPeak(2, 8, 4, 5, 0.02, 0.01), true);
+  assert.equal(isSpectralFluxPeak(2, 4, 8, 3, 0.02, 0.01), false);
+  assert.equal(isSpectralFluxPeak(2, 8, 4, 9, 0.02, 0.01), false);
+  assert.equal(isSpectralFluxPeak(2, 8, 4, 5, 0.005, 0.01), false);
 });
 
 test("rejects a weak effect repeat but keeps a new full-strength pick", () => {

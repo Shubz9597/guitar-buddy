@@ -34,61 +34,47 @@ export function estimateTempo(intervalsMs, attacksPerBeat) {
 
   if (valid.length === 0 || attacksPerBeat <= 0) return null;
 
-  // Every observed interval can be one attack, or several attack periods when
-  // the player misses notes. Score all plausible base intervals from the
-  // performance itself. The metronome target is deliberately not an input:
-  // playing twice as fast must measure twice as fast.
-  const candidates = valid.flatMap((interval) =>
-    Array.from({ length: 8 }, (_unused, index) => interval / (index + 1)).filter(
-      (candidate) => candidate >= 60,
-    ),
-  );
-  const scoredCandidates = candidates.map((candidate) => {
-    const samples = valid.map((interval) => {
-      const missedAttacks = Math.max(
-        1,
-        Math.min(8, Math.round(interval / candidate)),
-      );
-      const normalizedInterval = interval / missedAttacks;
-      const relativeError =
-        Math.abs(normalizedInterval - candidate) / candidate;
-      return {
-        interval: normalizedInterval,
-        weight: missedAttacks,
-        relativeError,
-      };
-    });
-    const inliers = samples.filter((sample) => sample.relativeError <= 0.22);
+  // Missed attacks create longer gaps; they do not make the real attack period
+  // shorter. Seed from the shorter half of the observed gaps, then fold only
+  // clear integer multiples back to that observed period. This avoids inventing
+  // an arbitrary 1/2 ... 1/8 divisor for normal beginner timing jitter.
+  const sorted = [...valid].sort((a, b) => a - b);
+  const lowerHalf = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)));
+  const initialCenter = median(lowerHalf);
 
-    return {
-      candidate,
-      inliers,
-      error:
-        inliers.length > 0
-          ? median(inliers.map((sample) => sample.relativeError))
-          : Number.POSITIVE_INFINITY,
-      averageWeight:
-        inliers.length > 0
-          ? inliers.reduce((sum, sample) => sum + sample.weight, 0) /
-            inliers.length
-          : Number.POSITIVE_INFINITY,
-    };
-  });
-  scoredCandidates.sort((a, b) => {
-    if (a.inliers.length !== b.inliers.length) {
-      return b.inliers.length - a.inliers.length;
-    }
-    if (Math.abs(a.error - b.error) > 0.005) return a.error - b.error;
-    return a.averageWeight - b.averageWeight;
-  });
+  const normalizeAround = (center, tolerance) =>
+    valid
+      .map((interval) => {
+        const missedAttacks = Math.max(
+          1,
+          Math.min(8, Math.round(interval / center)),
+        );
+        const normalizedInterval = interval / missedAttacks;
+        const relativeError =
+          Math.abs(normalizedInterval - center) / Math.max(center, 1);
+        return {
+          interval: normalizedInterval,
+          weight: missedAttacks,
+          relativeError,
+        };
+      })
+      .filter((sample) => sample.relativeError <= tolerance);
 
-  const usable = scoredCandidates[0].inliers;
-  const totalWeight = usable.reduce((sum, sample) => sum + sample.weight, 0);
-  const intervalMs =
-    usable.reduce(
-      (sum, sample) => sum + sample.interval * sample.weight,
-      0,
-    ) / totalWeight;
+  const firstPass = normalizeAround(initialCenter, 0.28);
+  const refinedCenter =
+    firstPass.length > 0
+      ? median(firstPass.map((sample) => sample.interval))
+      : median(valid);
+  const refinedSamples = normalizeAround(refinedCenter, 0.22);
+  const usable =
+    refinedSamples.length > 0
+      ? refinedSamples
+      : valid.map((interval) => ({
+          interval,
+          weight: 1,
+          relativeError: 0,
+        }));
+  const intervalMs = median(usable.map((sample) => sample.interval));
   const deviations = usable.map((sample) =>
     Math.abs(sample.interval - intervalMs),
   );
@@ -118,6 +104,38 @@ export function estimateTempo(intervalsMs, attacksPerBeat) {
         ),
       ),
   };
+}
+
+/**
+ * Returns true only when the middle spectral-flux sample is a local peak above
+ * the adaptive threshold. This produces one onset candidate on the descending
+ * edge instead of producing one candidate on every above-threshold frame.
+ *
+ * @param {number} beforeFlux
+ * @param {number} peakFlux
+ * @param {number} afterFlux
+ * @param {number} threshold
+ * @param {number} rms
+ * @param {number} minimumRms
+ * @returns {boolean}
+ */
+export function isSpectralFluxPeak(
+  beforeFlux,
+  peakFlux,
+  afterFlux,
+  threshold,
+  rms,
+  minimumRms,
+) {
+  return (
+    [beforeFlux, peakFlux, afterFlux, threshold, rms, minimumRms].every(
+      Number.isFinite,
+    ) &&
+    peakFlux > threshold &&
+    peakFlux > beforeFlux &&
+    peakFlux >= afterFlux &&
+    rms > minimumRms
+  );
 }
 
 /**
