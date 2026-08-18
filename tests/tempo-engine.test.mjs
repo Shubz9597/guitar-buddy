@@ -5,6 +5,7 @@ import {
   clampBpm,
   createClickPattern,
   cycleStepState,
+  estimatePulseTempo,
   estimateTempo,
   isAttackBurstStart,
   isLikelyEffectRepeat,
@@ -16,6 +17,42 @@ import {
   subdivisionIntervalMs,
 } from "../app/tempo-engine.js";
 
+function makePulseEnvelope({
+  periodMs,
+  durationMs = 8000,
+  sampleIntervalMs = 8,
+  accentEvery = 1,
+  quietAccent = 0.55,
+  missed = new Set(),
+  echoDelayMs = 0,
+  echoStrength = 0,
+}) {
+  const samples = Array.from(
+    { length: Math.floor(durationMs / sampleIntervalMs) },
+    () => 0,
+  );
+  for (
+    let pulse = 0, timeMs = 120;
+    timeMs < durationMs - 120;
+    pulse += 1, timeMs += periodMs
+  ) {
+    if (missed.has(pulse)) continue;
+    const strength = pulse % accentEvery === 0 ? 1 : quietAccent;
+    const frame = Math.round(timeMs / sampleIntervalMs);
+    samples[frame] += strength;
+    if (frame + 1 < samples.length) samples[frame + 1] += strength * 0.32;
+    if (echoDelayMs > 0 && echoStrength > 0) {
+      const echoFrame = Math.round(
+        (timeMs + echoDelayMs) / sampleIntervalMs,
+      );
+      if (echoFrame < samples.length) {
+        samples[echoFrame] += strength * echoStrength;
+      }
+    }
+  }
+  return samples;
+}
+
 test("calculates a median for odd and even samples", () => {
   assert.equal(median([3, 1, 2]), 2);
   assert.equal(median([4, 1, 2, 3]), 2.5);
@@ -26,6 +63,72 @@ test("reads 300 ms eighth notes as 100 BPM", () => {
   assert.ok(estimate);
   assert.equal(estimate.bpm, 100);
   assert.equal(estimate.confidence, 100);
+});
+
+test("finds 60 BPM sixteenths in a repeating audio envelope", () => {
+  const estimate = estimatePulseTempo(
+    makePulseEnvelope({ periodMs: 250 }),
+    8,
+    4,
+  );
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 60) < 1);
+});
+
+test("uses the attack pulse instead of the slower alternating accent", () => {
+  const estimate = estimatePulseTempo(
+    makePulseEnvelope({
+      periodMs: 250,
+      accentEvery: 2,
+      quietAccent: 0.55,
+    }),
+    8,
+    4,
+  );
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 60) < 1);
+});
+
+test("tolerates missed notes and a processed-guitar echo", () => {
+  const estimate = estimatePulseTempo(
+    makePulseEnvelope({
+      periodMs: 250,
+      missed: new Set([3, 8, 14, 19, 25]),
+      echoDelayMs: 96,
+      echoStrength: 0.28,
+    }),
+    8,
+    4,
+  );
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 60) < 2);
+});
+
+test("does not pull genuine double-speed playing back to 60 BPM", () => {
+  const estimate = estimatePulseTempo(
+    makePulseEnvelope({ periodMs: 125 }),
+    8,
+    4,
+  );
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.bpm - 120) < 2);
+});
+
+test("pulse tempo respects quarter, eighth, triplet, and sixteenth selection", () => {
+  for (const attacksPerBeat of [1, 2, 3, 4]) {
+    const estimate = estimatePulseTempo(
+      makePulseEnvelope({
+        periodMs: 60000 / (60 * attacksPerBeat),
+      }),
+      8,
+      attacksPerBeat,
+    );
+    assert.ok(estimate);
+    assert.ok(
+      Math.abs(estimate.bpm - 60) < 2,
+      `${attacksPerBeat} attacks/beat became ${estimate.bpm}`,
+    );
+  }
 });
 
 test("tolerates timing jitter and one missed attack", () => {

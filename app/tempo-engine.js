@@ -107,6 +107,148 @@ export function estimateTempo(intervalsMs, attacksPerBeat) {
 }
 
 /**
+ * Finds the repeating attack pulse in a uniformly sampled onset envelope.
+ * Unlike counting threshold crossings, autocorrelation is tolerant of missed
+ * notes, chord-string transients, and quieter repeats from a processed guitar.
+ *
+ * The shortest strong correlation peak is the musical attack period. Longer
+ * peaks are normally accents (for example, every second sixteenth note), while
+ * short effect echoes do not repeat strongly enough to pass the peak ratio.
+ *
+ * @param {number[]} onsetEnvelope
+ * @param {number} sampleIntervalMs
+ * @param {number} attacksPerBeat
+ * @returns {TempoEstimate | null}
+ */
+export function estimatePulseTempo(
+  onsetEnvelope,
+  sampleIntervalMs,
+  attacksPerBeat,
+) {
+  if (
+    !Array.isArray(onsetEnvelope) ||
+    onsetEnvelope.length < 64 ||
+    !Number.isFinite(sampleIntervalMs) ||
+    sampleIntervalMs <= 0 ||
+    !Number.isFinite(attacksPerBeat) ||
+    attacksPerBeat <= 0
+  ) {
+    return null;
+  }
+
+  const rawValues = onsetEnvelope.map((value) =>
+    Number.isFinite(value) ? value : 0,
+  );
+  // A narrow three-frame blur makes a pulse that falls between analyser polls
+  // correlate at its real fractional period instead of only at 2x the period.
+  const values = rawValues.map((value, index) => {
+    const before = index > 0 ? rawValues[index - 1] : value;
+    const after = index + 1 < rawValues.length ? rawValues[index + 1] : value;
+    return before * 0.25 + value * 0.5 + after * 0.25;
+  });
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const centered = values.map((value) => value - mean);
+  const totalEnergy = centered.reduce(
+    (sum, value) => sum + value * value,
+    0,
+  );
+  if (totalEnergy <= 1e-10) return null;
+
+  const minimumBpm = 30;
+  const maximumBpm = 300;
+  const minimumLag = Math.max(
+    2,
+    Math.ceil(60000 / (maximumBpm * attacksPerBeat * sampleIntervalMs)),
+  );
+  // At least three periods must fit in the window. Correlations based on only
+  // one or two repetitions are too easy to create with an isolated noise hit.
+  const maximumLag = Math.min(
+    centered.length - 2,
+    Math.floor(centered.length / 3),
+    Math.floor(60000 / (minimumBpm * attacksPerBeat * sampleIntervalMs)),
+  );
+  if (maximumLag <= minimumLag) return null;
+
+  const correlations = new Float64Array(maximumLag + 1);
+  for (let lag = minimumLag; lag <= maximumLag; lag += 1) {
+    let correlation = 0;
+    let leftEnergy = 0;
+    let rightEnergy = 0;
+    for (let index = lag; index < centered.length; index += 1) {
+      const left = centered[index - lag];
+      const right = centered[index];
+      correlation += left * right;
+      leftEnergy += left * left;
+      rightEnergy += right * right;
+    }
+    const denominator = Math.sqrt(leftEnergy * rightEnergy);
+    correlations[lag] = denominator > 1e-10 ? correlation / denominator : 0;
+  }
+
+  const peaks = [];
+  for (let lag = minimumLag; lag <= maximumLag; lag += 1) {
+    const score = correlations[lag];
+    const before =
+      lag === minimumLag ? Number.NEGATIVE_INFINITY : correlations[lag - 1];
+    const after =
+      lag === maximumLag ? Number.NEGATIVE_INFINITY : correlations[lag + 1];
+    if (score > 0 && score > before && score >= after) {
+      peaks.push({ lag, score });
+    }
+  }
+  if (peaks.length === 0) return null;
+
+  const strongestScore = Math.max(...peaks.map((peak) => peak.score));
+  if (strongestScore < 0.08) return null;
+
+  const strongPeakFloor = Math.max(0.06, strongestScore * 0.68);
+  const selected = peaks
+    .filter((peak) => peak.score >= strongPeakFloor)
+    .sort((left, right) => left.lag - right.lag)[0];
+  if (!selected) return null;
+
+  // Parabolic interpolation removes most of the 8 ms analyser-frame rounding.
+  let refinedLag = selected.lag;
+  if (selected.lag > minimumLag && selected.lag < maximumLag) {
+    const before = correlations[selected.lag - 1];
+    const center = correlations[selected.lag];
+    const after = correlations[selected.lag + 1];
+    const denominator = before - 2 * center + after;
+    if (Math.abs(denominator) > 1e-10) {
+      const adjustment = Math.max(
+        -0.5,
+        Math.min(0.5, (0.5 * (before - after)) / denominator),
+      );
+      refinedLag += adjustment;
+    }
+  }
+
+  const intervalMs = refinedLag * sampleIntervalMs;
+  const durationScore = Math.min(
+    1,
+    (onsetEnvelope.length * sampleIntervalMs) / 8000,
+  );
+  const correlationScore = Math.max(
+    0,
+    Math.min(1, (selected.score - 0.06) / 0.3),
+  );
+  const harmonicScore = Math.min(1, selected.score / strongestScore);
+  const confidence = Math.round(
+    (0.25 + correlationScore * 0.75) *
+      (0.55 + durationScore * 0.45) *
+      (0.75 + harmonicScore * 0.25) *
+      100,
+  );
+
+  return {
+    bpm: 60000 / (intervalMs * attacksPerBeat),
+    confidence: Math.min(100, confidence),
+    intervalMs,
+    offsets: [],
+  };
+}
+
+/**
  * Returns true only when the middle spectral-flux sample is a local peak above
  * the adaptive threshold. This produces one onset candidate on the descending
  * edge instead of producing one candidate on every above-threshold frame.

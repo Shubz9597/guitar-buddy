@@ -6,7 +6,7 @@ import {
   clampBpm,
   createClickPattern,
   cycleStepState,
-  estimateTempo,
+  estimatePulseTempo,
   isAttackBurstStart,
   isLikelyEffectRepeat,
   isSpectralFluxPeak,
@@ -101,7 +101,10 @@ export default function Home() {
   const nextClickTimeRef = useRef(0);
   const stepIndexRef = useRef(0);
   const gridOriginMsRef = useRef<number | null>(null);
-  const intervalsRef = useRef<number[]>([]);
+  const tempoEnvelopeRef = useRef<number[]>([]);
+  const tempoEnvelopeTimesRef = useRef<number[]>([]);
+  const tempoReadingsRef = useRef<number[]>([]);
+  const nextTempoAnalysisAtRef = useRef(0);
   const lastOnsetRef = useRef<number | null>(null);
   const lastOnsetStrengthRef = useRef(0);
   const lastDetectedAtRef = useRef(0);
@@ -173,7 +176,10 @@ export default function Home() {
   }, []);
 
   const resetMeasurements = useCallback(() => {
-    intervalsRef.current = [];
+    tempoEnvelopeRef.current = [];
+    tempoEnvelopeTimesRef.current = [];
+    tempoReadingsRef.current = [];
+    nextTempoAnalysisAtRef.current = 0;
     lastOnsetRef.current = null;
     lastOnsetStrengthRef.current = 0;
     lastDetectedAtRef.current = 0;
@@ -203,12 +209,6 @@ export default function Home() {
   useEffect(() => {
     targetBpmRef.current = targetBpm;
     attacksPerBeatRef.current = attacksPerBeat;
-
-    const estimate = estimateTempo(intervalsRef.current, attacksPerBeat);
-    if (estimate) {
-      setDetectedBpm(estimate.bpm);
-      setConfidence(estimate.confidence);
-    }
 
     const context = audioContextRef.current;
     if (sessionRunningRef.current && context) {
@@ -315,26 +315,6 @@ export default function Home() {
 
     lastOnsetRef.current = timeMs;
     lastOnsetStrengthRef.current = strength;
-    if (previousOnset === null) return;
-
-    const interval = timeMs - previousOnset;
-    if (interval > 3000) {
-      intervalsRef.current = [];
-      setDetectedBpm(null);
-      setConfidence(0);
-      return;
-    }
-
-    if (interval < 35) return;
-    intervalsRef.current = [...intervalsRef.current, interval].slice(-24);
-    const estimate = estimateTempo(
-      intervalsRef.current,
-      attacksPerBeatRef.current,
-    );
-    if (estimate) {
-      setDetectedBpm(estimate.bpm);
-      setConfidence(estimate.confidence);
-    }
   }, []);
 
   const scheduleClick = useCallback(
@@ -553,6 +533,7 @@ export default function Home() {
       let previousRms = 0;
       let previousMinimumRms = Number.POSITIVE_INFINITY;
       let previousFrameAtMs = 0;
+      let previousLogRms: number | null = null;
       let fluxHistoryLength = 0;
       let onsetArmed = true;
 
@@ -606,6 +587,62 @@ export default function Home() {
           0.18;
         const minimumRms = 0.0025 + (10 - currentSensitivity) * 0.0012;
         const rearmThreshold = fluxMean + fluxDeviation * 0.8 + 0.08;
+
+        const logRms = Math.log(Math.max(rms, 0.0000001));
+        const envelopeValue =
+          previousLogRms === null || rms < minimumRms * 0.55
+            ? 0
+            : Math.max(0, logRms - previousLogRms);
+        previousLogRms = logRms;
+        tempoEnvelopeRef.current.push(envelopeValue);
+        tempoEnvelopeTimesRef.current.push(nowMs);
+
+        if (nowMs >= nextTempoAnalysisAtRef.current) {
+          nextTempoAnalysisAtRef.current = nowMs + 500;
+          const cutoffMs = nowMs - 8000;
+          const firstLiveSample = tempoEnvelopeTimesRef.current.findIndex(
+            (time) => time >= cutoffMs,
+          );
+          if (firstLiveSample > 0) {
+            tempoEnvelopeTimesRef.current.splice(0, firstLiveSample);
+            tempoEnvelopeRef.current.splice(0, firstLiveSample);
+          }
+
+          const envelopeTimes = tempoEnvelopeTimesRef.current;
+          const envelope = tempoEnvelopeRef.current;
+          const windowDurationMs =
+            envelopeTimes.length > 1
+              ? envelopeTimes[envelopeTimes.length - 1] - envelopeTimes[0]
+              : 0;
+          if (windowDurationMs >= 7600) {
+            const sampleIntervalMs =
+              windowDurationMs / Math.max(1, envelopeTimes.length - 1);
+            const pulseEstimate = estimatePulseTempo(
+              envelope,
+              sampleIntervalMs,
+              attacksPerBeatRef.current,
+            );
+            if (pulseEstimate) {
+              const readings = [
+                ...tempoReadingsRef.current,
+                pulseEstimate.bpm,
+              ].slice(-5);
+              tempoReadingsRef.current = readings;
+              const orderedReadings = [...readings].sort(
+                (left, right) => left - right,
+              );
+              const middle = Math.floor(orderedReadings.length / 2);
+              const smoothedBpm =
+                orderedReadings.length % 2 === 0
+                  ? (orderedReadings[middle - 1] +
+                      orderedReadings[middle]) /
+                    2
+                  : orderedReadings[middle];
+              setDetectedBpm(smoothedBpm);
+              setConfidence(pulseEstimate.confidence);
+            }
+          }
+        }
 
         if (!onsetArmed && spectralFlux <= rearmThreshold) {
           onsetArmed = true;
@@ -942,7 +979,11 @@ export default function Home() {
                 type="button"
                 className={attacksPerBeat === item.value ? "selected" : ""}
                 aria-pressed={attacksPerBeat === item.value}
-                onClick={() => setAttacksPerBeat(item.value)}
+                onClick={() => {
+                  attacksPerBeatRef.current = item.value;
+                  setAttacksPerBeat(item.value);
+                  resetMeasurements();
+                }}
               >
                 {item.label}
               </button>
@@ -1145,9 +1186,7 @@ export default function Home() {
           </div>
           <p>
             {detectedBpm === null
-              ? `Play four steady ${
-                  practiceMode === "rhythm" ? "strums" : "picks"
-                }`
+              ? "Play steadily for about 8 seconds"
               : `${confidence}% confidence · ${attackCount} ${
                   practiceMode === "rhythm" ? "strums" : "picks"
                 }`}
