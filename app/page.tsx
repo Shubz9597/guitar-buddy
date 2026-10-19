@@ -6,14 +6,12 @@ import {
   clampBpm,
   createClickPattern,
   cycleStepState,
-  estimatePulseTempo,
-  isAttackBurstStart,
-  isLikelyEffectRepeat,
-  isSpectralFluxPeak,
   nearestTimingErrorMs,
   parseBpmDraft,
   subdivisionIntervalMs,
 } from "./tempo-engine";
+import processorUrl from "./guitar-processor.js?worker&url";
+import { PulseTracker } from "./pulse-tracker.js";
 
 type InputStatus = "idle" | "starting" | "listening" | "error";
 type TimingHit = { id: number; errorMs: number };
@@ -95,20 +93,20 @@ export default function Home() {
   const clickBufferRef = useRef<AudioBuffer | null>(null);
   const clickOutputRef = useRef<AudioNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const analysisTimerRef = useRef<number | null>(null);
+  const inputNodeRef = useRef<AudioWorkletNode | null>(null);
+  const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const workletModuleRef = useRef<{
+    context: AudioContext;
+    ready: Promise<void>;
+  } | null>(null);
+  const pulseTrackerRef = useRef(new PulseTracker());
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulseTimersRef = useRef<Set<number>>(new Set());
   const nextClickTimeRef = useRef(0);
   const stepIndexRef = useRef(0);
   const gridOriginMsRef = useRef<number | null>(null);
-  const tempoEnvelopeRef = useRef<number[]>([]);
-  const tempoEnvelopeTimesRef = useRef<number[]>([]);
-  const tempoReadingsRef = useRef<number[]>([]);
-  const nextTempoAnalysisAtRef = useRef(0);
-  const lastOnsetRef = useRef<number | null>(null);
-  const lastOnsetStrengthRef = useRef(0);
-  const lastDetectedAtRef = useRef(0);
   const analysisRunRef = useRef(0);
+  const measurementRunRef = useRef(0);
   const targetBpmRef = useRef(targetBpm);
   const attacksPerBeatRef = useRef(attacksPerBeat);
   const practiceModeRef = useRef<PracticeMode>(practiceMode);
@@ -176,13 +174,9 @@ export default function Home() {
   }, []);
 
   const resetMeasurements = useCallback(() => {
-    tempoEnvelopeRef.current = [];
-    tempoEnvelopeTimesRef.current = [];
-    tempoReadingsRef.current = [];
-    nextTempoAnalysisAtRef.current = 0;
-    lastOnsetRef.current = null;
-    lastOnsetStrengthRef.current = 0;
-    lastDetectedAtRef.current = 0;
+    pulseTrackerRef.current.reset();
+    measurementRunRef.current += 1;
+    inputNodeRef.current?.port.postMessage({ type: "reset", generation: measurementRunRef.current });
     hitIdRef.current = 0;
     setDetectedBpm(null);
     setConfidence(0);
@@ -247,7 +241,8 @@ export default function Home() {
 
   useEffect(() => {
     sensitivityRef.current = sensitivity;
-  }, [sensitivity]);
+    inputNodeRef.current?.port.postMessage({ type: "settings", sensitivity, mode: practiceMode });
+  }, [sensitivity, practiceMode]);
 
   useEffect(() => {
     dawLatencyMsRef.current = dawLatencyMs;
@@ -272,32 +267,7 @@ export default function Home() {
       mediaDevices.removeEventListener("devicechange", handleDeviceChange);
   }, [refreshAudioDevices]);
 
-  const registerOnset = useCallback((timeMs: number, strength: number) => {
-    const previousCandidateAt =
-      lastDetectedAtRef.current > 0 ? lastDetectedAtRef.current : null;
-    lastDetectedAtRef.current = timeMs;
-    if (
-      !isAttackBurstStart(
-        timeMs,
-        previousCandidateAt,
-        practiceModeRef.current,
-      )
-    ) {
-      return;
-    }
-
-    const previousOnset = lastOnsetRef.current;
-    if (
-      previousOnset !== null &&
-      isLikelyEffectRepeat(
-        timeMs - previousOnset,
-        strength,
-        lastOnsetStrengthRef.current,
-      )
-    ) {
-      return;
-    }
-
+  const registerOnset = useCallback((timeMs: number) => {
     setAttackCount((count) => count + 1);
 
     const gridOriginMs = gridOriginMsRef.current;
@@ -312,9 +282,6 @@ export default function Home() {
       setLatestError(errorMs);
       setTimingHits((hits) => [...hits, hit].slice(-28));
     }
-
-    lastOnsetRef.current = timeMs;
-    lastOnsetStrengthRef.current = strength;
   }, []);
 
   const scheduleClick = useCallback(
@@ -404,12 +371,19 @@ export default function Home() {
 
   const stopInputAnalysis = useCallback(() => {
     analysisRunRef.current += 1;
-    if (analysisTimerRef.current !== null) {
-      clearInterval(analysisTimerRef.current);
-      analysisTimerRef.current = null;
+    if (inputNodeRef.current) {
+      inputNodeRef.current.port.onmessage = null;
+      inputNodeRef.current.port.close();
+      inputNodeRef.current.disconnect();
+      inputNodeRef.current = null;
     }
+    inputSourceRef.current?.disconnect();
+    inputSourceRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    pulseTrackerRef.current.reset();
+    setDetectedBpm(null);
+    setConfidence(0);
     setInputLevel(0);
   }, []);
 
@@ -445,240 +419,129 @@ export default function Home() {
       stopInputAnalysis();
       const analysisRun = analysisRunRef.current;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: false,
-          channelCount: 1,
-          deviceId: requestedDeviceId
-            ? { exact: requestedDeviceId }
-            : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-        },
-      });
-      if (
-        analysisRun !== analysisRunRef.current ||
-        !sessionRunningRef.current
-      ) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
-      const source = context.createMediaStreamSource(stream);
-      const highPass = context.createBiquadFilter();
-      const analyser = context.createAnalyser();
-
-      highPass.type = "highpass";
-      highPass.frequency.value = 120;
-      highPass.Q.value = 0.7;
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.08;
-      source.connect(highPass);
-      highPass.connect(analyser);
-      streamRef.current = stream;
-      const activeTrack = stream.getAudioTracks()[0];
-      setRoutingMessage(
-        `Guitar input: ${activeTrack?.label || "Windows default input"}`,
-      );
-      void refreshAudioDevices();
-
-      const trackSettings = stream.getAudioTracks()[0]?.getSettings() as
-        | (MediaTrackSettings & { latency?: number })
-        | undefined;
-      const reportedInputLatency = trackSettings?.latency;
-      const inputLatency =
-        Number.isFinite(reportedInputLatency) && reportedInputLatency! > 0
-          ? reportedInputLatency!
-          : 0;
-      const contextWithOutputLatency = context as AudioContext & {
-        outputLatency?: number;
-      };
-      const reportedOutputLatency = contextWithOutputLatency.outputLatency;
-      const outputLatency =
-        Number.isFinite(reportedOutputLatency) && reportedOutputLatency! > 0
-          ? reportedOutputLatency!
-          : Math.max(0, context.baseLatency || 0);
-      const analyserLatency = analyser.fftSize / context.sampleRate / 4;
-      const frameLatency = 0.008;
-      const measuredLatencyMs = Math.round(
-        Math.max(
-          0,
-          Math.min(
-            120,
-            (inputLatency + outputLatency + analyserLatency + frameLatency) *
-              1000,
-          ),
-        ),
-      );
-      latencyCompensationMsRef.current = measuredLatencyMs;
-      setLatencyCompensationMs(measuredLatencyMs);
-
-      const spectrum = new Uint8Array(analyser.frequencyBinCount);
-      const previousSpectrum = new Uint8Array(analyser.frequencyBinCount);
-      const waveform = new Float32Array(analyser.fftSize);
-      const binWidth = context.sampleRate / analyser.fftSize;
-      const firstBin = Math.max(1, Math.floor(450 / binWidth));
-      const lastBin = Math.min(
-        analyser.frequencyBinCount - 1,
-        Math.ceil(6500 / binWidth),
-      );
-      const startedAt = context.currentTime;
-      let hasPreviousFrame = false;
-      let fluxMean = 0;
-      let fluxDeviation = 0;
-      let nextMeterUpdate = 0;
-      let fluxTwoFramesAgo = 0;
-      let previousFlux = 0;
-      let previousFluxThreshold = Number.POSITIVE_INFINITY;
-      let previousRms = 0;
-      let previousMinimumRms = Number.POSITIVE_INFINITY;
-      let previousFrameAtMs = 0;
-      let previousLogRms: number | null = null;
-      let fluxHistoryLength = 0;
-      let onsetArmed = true;
-
-      const analyse = () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            autoGainControl: false,
+            channelCount: { ideal: 2 },
+            deviceId: requestedDeviceId
+              ? { exact: requestedDeviceId }
+              : undefined,
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+        });
         if (
-          audioContextRef.current !== context ||
           analysisRun !== analysisRunRef.current ||
           !sessionRunningRef.current
         ) {
+          stream.getTracks().forEach((track) => track.stop());
           return;
         }
 
-        analyser.getByteFrequencyData(spectrum);
-        analyser.getFloatTimeDomainData(waveform);
-
-        let energy = 0;
-        for (let index = 0; index < waveform.length; index += 1) {
-          energy += waveform[index] * waveform[index];
+        streamRef.current = stream;
+        if (workletModuleRef.current?.context !== context) {
+          workletModuleRef.current = {
+            context,
+            ready: context.audioWorklet.addModule(processorUrl),
+          };
         }
-        const rms = Math.sqrt(energy / waveform.length);
+        await workletModuleRef.current.ready;
+        if (analysisRun !== analysisRunRef.current || !sessionRunningRef.current) return;
+        const source = context.createMediaStreamSource(stream);
+        const processor = new AudioWorkletNode(context, "pickpulse-guitar", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+          channelCountMode: "max",
+        });
+        inputSourceRef.current = source;
+        inputNodeRef.current = processor;
+        processor.port.postMessage({
+          type: "settings",
+          sensitivity: sensitivityRef.current,
+          mode: practiceModeRef.current,
+        });
+        processor.port.postMessage({ type: "reset", generation: measurementRunRef.current });
+        source.connect(processor);
+        processor.connect(context.destination);
+        const activeTrack = stream.getAudioTracks()[0];
+        activeTrack?.addEventListener("ended", () => {
+          if (analysisRun !== analysisRunRef.current) return;
+          stopInputAnalysis();
+          setInputStatus("error");
+          setErrorMessage("Guitar input disconnected. Select an available input to reconnect.");
+        }, { once: true });
+        setRoutingMessage(
+          `Guitar input: ${activeTrack?.label || "Windows default input"}`,
+        );
+        void refreshAudioDevices();
 
-        let spectralFlux = 0;
-        if (hasPreviousFrame) {
-          for (let index = firstBin; index <= lastBin; index += 1) {
-            const increase = spectrum[index] - previousSpectrum[index];
-            if (increase > 0) spectralFlux += increase;
-          }
-          spectralFlux /= lastBin - firstBin + 1;
-        } else {
-          hasPreviousFrame = true;
-        }
-        previousSpectrum.set(spectrum);
+        const trackSettings = stream.getAudioTracks()[0]?.getSettings() as
+          | (MediaTrackSettings & { latency?: number })
+          | undefined;
+        const reportedInputLatency = trackSettings?.latency;
+        const inputLatency =
+          Number.isFinite(reportedInputLatency) && reportedInputLatency! > 0
+            ? reportedInputLatency!
+            : 0;
+        const contextWithOutputLatency = context as AudioContext & {
+          outputLatency?: number;
+        };
+        const reportedOutputLatency = contextWithOutputLatency.outputLatency;
+        const outputLatency =
+          Number.isFinite(reportedOutputLatency) && reportedOutputLatency! > 0
+            ? reportedOutputLatency!
+            : Math.max(0, context.baseLatency || 0);
+        const measuredLatencyMs = Math.round(
+          Math.max(
+            0,
+            Math.min(
+              120,
+              (inputLatency + outputLatency) *
+                1000,
+            ),
+          ),
+        );
+        latencyCompensationMsRef.current = measuredLatencyMs;
+        setLatencyCompensationMs(measuredLatencyMs);
 
-        const previousMean = fluxMean;
-        fluxMean = fluxMean * 0.92 + spectralFlux * 0.08;
-        fluxDeviation =
-          fluxDeviation * 0.92 +
-          Math.abs(spectralFlux - previousMean) * 0.08;
-
-        const nowMs = context.currentTime * 1000;
-        if (nowMs >= nextMeterUpdate) {
-          const db = 20 * Math.log10(Math.max(rms, 0.00001));
-          setInputLevel(Math.max(0, Math.min(1, (db + 58) / 43)));
-          nextMeterUpdate = nowMs + 65;
-        }
-
-        const currentSensitivity = sensitivityRef.current;
-        const fluxThreshold =
-          fluxMean +
-          fluxDeviation * (3.45 - currentSensitivity * 0.22) +
-          0.18;
-        const minimumRms = 0.0025 + (10 - currentSensitivity) * 0.0012;
-        const rearmThreshold = fluxMean + fluxDeviation * 0.8 + 0.08;
-
-        const logRms = Math.log(Math.max(rms, 0.0000001));
-        const envelopeValue =
-          previousLogRms === null || rms < minimumRms * 0.55
-            ? 0
-            : Math.max(0, logRms - previousLogRms);
-        previousLogRms = logRms;
-        tempoEnvelopeRef.current.push(envelopeValue);
-        tempoEnvelopeTimesRef.current.push(nowMs);
-
-        if (nowMs >= nextTempoAnalysisAtRef.current) {
-          nextTempoAnalysisAtRef.current = nowMs + 500;
-          const cutoffMs = nowMs - 8000;
-          const firstLiveSample = tempoEnvelopeTimesRef.current.findIndex(
-            (time) => time >= cutoffMs,
-          );
-          if (firstLiveSample > 0) {
-            tempoEnvelopeTimesRef.current.splice(0, firstLiveSample);
-            tempoEnvelopeRef.current.splice(0, firstLiveSample);
-          }
-
-          const envelopeTimes = tempoEnvelopeTimesRef.current;
-          const envelope = tempoEnvelopeRef.current;
-          const windowDurationMs =
-            envelopeTimes.length > 1
-              ? envelopeTimes[envelopeTimes.length - 1] - envelopeTimes[0]
-              : 0;
-          if (windowDurationMs >= 7600) {
-            const sampleIntervalMs =
-              windowDurationMs / Math.max(1, envelopeTimes.length - 1);
-            const pulseEstimate = estimatePulseTempo(
-              envelope,
-              sampleIntervalMs,
-              attacksPerBeatRef.current,
+        processor.port.onmessage = ({ data }: MessageEvent<{
+          sampleIntervalMs: number;
+          generation: number;
+          frames: { timeMs: number; rms: number; envelope: number; onset: boolean; channel: number }[];
+        }>) => {
+          if (audioContextRef.current !== context || analysisRun !== analysisRunRef.current ||
+              !sessionRunningRef.current || data.generation !== measurementRunRef.current) return;
+          for (const frame of data.frames) {
+            if (frame.onset) registerOnset(frame.timeMs);
+            const estimate = pulseTrackerRef.current.push(
+              frame, data.sampleIntervalMs, attacksPerBeatRef.current,
             );
-            if (pulseEstimate) {
-              const readings = [
-                ...tempoReadingsRef.current,
-                pulseEstimate.bpm,
-              ].slice(-5);
-              tempoReadingsRef.current = readings;
-              const orderedReadings = [...readings].sort(
-                (left, right) => left - right,
-              );
-              const middle = Math.floor(orderedReadings.length / 2);
-              const smoothedBpm =
-                orderedReadings.length % 2 === 0
-                  ? (orderedReadings[middle - 1] +
-                      orderedReadings[middle]) /
-                    2
-                  : orderedReadings[middle];
-              setDetectedBpm(smoothedBpm);
-              setConfidence(pulseEstimate.confidence);
+            if (estimate !== undefined) {
+              setDetectedBpm(estimate?.bpm ?? null);
+              setConfidence(estimate?.confidence ?? 0);
             }
           }
-        }
-
-        if (!onsetArmed && spectralFlux <= rearmThreshold) {
-          onsetArmed = true;
-        }
-
-        if (
-          fluxHistoryLength >= 2 &&
-          onsetArmed &&
-          context.currentTime - startedAt > 0.55 &&
-          isSpectralFluxPeak(
-            fluxTwoFramesAgo,
-            previousFlux,
-            spectralFlux,
-            previousFluxThreshold,
-            previousRms,
-            previousMinimumRms,
-          )
-        ) {
-          onsetArmed = false;
-          const onsetStrength =
-            previousFlux * Math.sqrt(Math.max(previousRms, 0.00001));
-          registerOnset(previousFrameAtMs, onsetStrength);
-        }
-
-        fluxTwoFramesAgo = previousFlux;
-        previousFlux = spectralFlux;
-        previousFluxThreshold = fluxThreshold;
-        previousRms = rms;
-        previousMinimumRms = minimumRms;
-        previousFrameAtMs = nowMs;
-        fluxHistoryLength += 1;
-      };
-
-      setInputStatus("listening");
-      analyse();
-      analysisTimerRef.current = window.setInterval(analyse, 8);
+          const latest = data.frames[data.frames.length - 1];
+          if (latest) {
+            const db = 20 * Math.log10(Math.max(latest.rms, 0.00001));
+            setInputLevel(Math.max(0, Math.min(1, (db + 70) / 55)));
+          }
+        };
+        processor.onprocessorerror = () => {
+          if (analysisRun !== analysisRunRef.current) return;
+          stopInputAnalysis();
+          setInputStatus("error");
+          setErrorMessage("Guitar analysis stopped. Select the input again to reconnect.");
+        };
+        setInputStatus("listening");
+      } catch (error) {
+        if (analysisRun !== analysisRunRef.current || !sessionRunningRef.current) return;
+        workletModuleRef.current = null;
+        stopInputAnalysis();
+        throw error;
+      }
     },
     [refreshAudioDevices, registerOnset, stopInputAnalysis],
   );
@@ -1186,7 +1049,7 @@ export default function Home() {
           </div>
           <p>
             {detectedBpm === null
-              ? "Play steadily for about 8 seconds"
+              ? "Play steadily for 3–8 seconds"
               : `${confidence}% confidence · ${attackCount} ${
                   practiceMode === "rhythm" ? "strums" : "picks"
                 }`}
