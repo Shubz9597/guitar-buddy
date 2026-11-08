@@ -1,0 +1,379 @@
+{
+  "song": "Kill the King",
+  "artist": "Megadeth",
+  "tuning": "E A D G B E (standard)",
+  "sections": [
+    {
+      "name": "Main rhythm (intro, verses, choruses)",
+      "playing": "Bridge humbucker, volume 10, tone 10. Tune to E standard and verify with ReaTune - no drop D needed. Pick hard near the bridge with tight alternate picking; palm-mute fully for the chugging low-string riff patterns and release the palm on the open stabs so the ring-through chords cut. Keep pick attack consistent - the 2000 recording is dry, punchy and double-tracked.",
+      "chain": [
+        {
+          "kind": "tuner",
+          "plugin": "VST: ReaTune (Cockos)",
+          "params": [],
+          "emulates": "Reference tuner for E standard tuning",
+          "confidence": "confirmed",
+          "bypassed": false
+        },
+        {
+          "kind": "amp",
+          "plugin": "VST3: Archetype Nolly (Neural DSP)",
+          "params": [
+            {
+              "name": "Input Gain",
+              "value": "0.0"
+            },
+            {
+              "name": "Gate",
+              "value": "-48.0"
+            },
+            {
+              "name": "Pedals Active",
+              "value": "Active"
+            },
+            {
+              "name": "OD1 Active",
+              "value": "Active"
+            },
+            {
+              "name": "OD1 Drive",
+              "value": "0.15"
+            },
+            {
+              "name": "OD1 Tone",
+              "value": "0.60"
+            },
+            {
+              "name": "OD1 Level",
+              "value": "0.80"
+            },
+            {
+              "name": "Amp Type",
+              "value": "Rhythm"
+            },
+            {
+              "name": "Rhythm Gain",
+              "value": "0.55"
+            },
+            {
+              "name": "Rhythm Low",
+              "value": "0.45"
+            },
+            {
+              "name": "Rhythm Mid",
+              "value": "0.55"
+            },
+            {
+              "name": "Rhythm High",
+              "value": "0.65"
+            },
+            {
+              "name": "Rhythm Master",
+              "value": "0.60"
+            },
+            {
+              "name": "Rhythm Presence",
+              "value": "0.60"
+            },
+            {
+              "name": "Rhythm Resonance",
+              "value": "0.50"
+            },
+            {
+              "name": "Rhythm Level",
+              "value": "0.0"
+            },
+            {
+              "name": "Cab Active",
+              "value": "Active"
+            },
+            {
+              "name": "Cab Type",
+              "value": "Rhythm"
+            },
+            {
+              "name": "Cab 1 Active",
+              "value": "On"
+            },
+            {
+              "name": "Cab 1 Mic IR",
+              "value": "Dynamic 57"
+            },
+            {
+              "name": "Cab 1 Position",
+              "value": "0.35"
+            },
+            {
+              "name": "Cab 1 Distance",
+              "value": "0.20"
+            },
+            {
+              "name": "Cab 1 Level",
+              "value": "0.0"
+            },
+            {
+              "name": "Cab 1 Pan",
+              "value": "0.00"
+            },
+            {
+              "name": "Cab 1 Phase",
+              "value": "Normal"
+            }
+          ],
+          "emulates": "Mustaine-era studio rack: CAE 3+SE preamp into VHT 2150 power amp into a Marshall 4x12 with Greenbacks - the confirmed rig of the surrounding Countdown/Youthanasia-era records; no public session sheet exists for this track, so Nolly's 5150-style Rhythm channel stands in with the Marshall-style settings published for this song (gain ~7.5, mids ~5.5, presence ~6.5)",
+          "confidence": "likely",
+          "bypassed": false
+        },
+        {
+          "kind": "comp",
+          "plugin": "VST: ReaComp (Cockos)",
+          "params": [
+            {
+              "name": "Threshold",
+              "value": "-18.0 dB"
+            },
+            {
+              "name": "Ratio",
+              "value": "2.000 :1"
+            },
+            {
+              "name": "Attack",
+              "value": "4.00 ms"
+            },
+            {
+              "name": "Release",
+              "value": "120 ms"
+            },
+            {
+              "name": "Knee",
+              "value": "6.0 dB"
+            },
+            {
+              "name": "Auto Release",
+              "value": "1"
+            },
+            {
+              "name": "Auto Make Up Gain",
+              "value": "1"
+            }
+          ],
+          "emulates": "Mix glue for double-tracked rhythm palm mutes (no equivalent in original recording - mix hygiene only)",
+          "confidence": "guess",
+          "bypassed": false
+        }
+      ]
+    },
+    {
+      "name": "Solo / harmonised lead",
+      "playing": "Bridge humbucker, volume 10, tone rolled back to 8 to tame fizz. The solo is traded between Mustaine and Al Pitrelli with classic twin-guitar harmony lines - play the fast passages with firm alternate picking and let fretting-hand vibrato do the singing. Dig in on bends; the tone is compressed and upfront, so dynamics come from your hands.",
+      "chain": [
+        {
+          "kind": "tuner",
+          "plugin": "VST: ReaTune (Cockos)",
+          "params": [],
+          "emulates": "Reference tuner for E standard tuning",
+          "confidence": "confirmed",
+          "bypassed": false
+        },
+        {
+          "kind": "amp",
+          "plugin": "VST3: Archetype Nolly (Neural DSP)",
+          "params": [
+            {
+              "name": "Input Gain",
+              "value": "0.0"
+            },
+            {
+              "name": "Gate",
+              "value": "-52.0"
+            },
+            {
+              "name": "Pedals Active",
+              "value": "Active"
+            },
+            {
+              "name": "OD1 Active",
+              "value": "Active"
+            },
+            {
+              "name": "OD1 Drive",
+              "value": "0.10"
+            },
+            {
+              "name": "OD1 Tone",
+              "value": "0.70"
+            },
+            {
+              "name": "OD1 Level",
+              "value": "0.85"
+            },
+            {
+              "name": "Amp Type",
+              "value": "Lead"
+            },
+            {
+              "name": "Lead Gain",
+              "value": "0.60"
+            },
+            {
+              "name": "Lead Bass",
+              "value": "0.50"
+            },
+            {
+              "name": "Lead Mid",
+              "value": "0.60"
+            },
+            {
+              "name": "Lead Treble",
+              "value": "0.65"
+            },
+            {
+              "name": "Lead Master",
+              "value": "0.55"
+            },
+            {
+              "name": "Lead Level",
+              "value": "0.0"
+            },
+            {
+              "name": "Cab Active",
+              "value": "Active"
+            },
+            {
+              "name": "Cab Type",
+              "value": "Lead"
+            },
+            {
+              "name": "Cab 1 Active",
+              "value": "On"
+            },
+            {
+              "name": "Cab 1 Mic IR",
+              "value": "Dynamic 57"
+            },
+            {
+              "name": "Cab 1 Position",
+              "value": "0.45"
+            },
+            {
+              "name": "Cab 1 Distance",
+              "value": "0.25"
+            },
+            {
+              "name": "Cab 1 Level",
+              "value": "0.0"
+            },
+            {
+              "name": "Cab 1 Pan",
+              "value": "0.00"
+            },
+            {
+              "name": "Cab 1 Phase",
+              "value": "Normal"
+            },
+            {
+              "name": "Delay-2 Active",
+              "value": "Active"
+            },
+            {
+              "name": "Delay-2 Dry/Wet",
+              "value": "0.22"
+            },
+            {
+              "name": "Delay-2 Sync2Host",
+              "value": "Active"
+            },
+            {
+              "name": "Delay-2 Sync Note",
+              "value": "1/8"
+            },
+            {
+              "name": "Delay-2 Feedback",
+              "value": "0.25"
+            },
+            {
+              "name": "Delay-2 Low Cut",
+              "value": "150"
+            },
+            {
+              "name": "Delay-2 High Cut",
+              "value": "3000"
+            },
+            {
+              "name": "Delay-2 Ping Pong",
+              "value": "Active"
+            },
+            {
+              "name": "Reverb Active",
+              "value": "Active"
+            },
+            {
+              "name": "Reverb Dry/Wet",
+              "value": "0.18"
+            },
+            {
+              "name": "Reverb Decay",
+              "value": "1600"
+            },
+            {
+              "name": "Reverb Low Cut",
+              "value": "300"
+            },
+            {
+              "name": "Reverb High Cut",
+              "value": "0.50"
+            }
+          ],
+          "emulates": "Same CAE 3+SE / VHT / Marshall 4x12 studio rig pushed harder for leads, in the Marshall-ish voicing published for this song",
+          "confidence": "likely",
+          "bypassed": false
+        },
+        {
+          "kind": "comp",
+          "plugin": "VST3: TDR Kotelnikov (Tokyo Dawn Labs)",
+          "params": [
+            {
+              "name": "Threshold",
+              "value": "-14.0 dB"
+            },
+            {
+              "name": "Ratio",
+              "value": "2.0 :1"
+            },
+            {
+              "name": "Release RMS",
+              "value": "200 ms"
+            },
+            {
+              "name": "Makeup",
+              "value": "1.0 dB"
+            },
+            {
+              "name": "Dry Wet",
+              "value": "100.0 %"
+            }
+          ],
+          "emulates": "Studio lead compression/leveling for the solo bus (no documented original unit - mixing step)",
+          "confidence": "guess",
+          "bypassed": false
+        }
+      ]
+    }
+  ],
+  "sources": [
+    "https://tabs.ultimate-guitar.com/tab/megadeth/kill-the-king-tabs-163597",
+    "https://www.tonemirror.so/tones/megadeth-kill-the-king",
+    "https://equipboard.com/albums/megadeth-youthanasia",
+    "https://www.harmonycentral.com/forums/topic/1390320-what-amp-was-the-tone-for-megadeths-youthanasia/page/2",
+    "https://en.wikipedia.org/wiki/Megadeth",
+    "https://tonestakr.com/guitarists/dave-mustaine/timeline",
+    "https://equipboard.com/pros/dave-mustaine",
+    "https://www.tone3000.com/blog/dave-mustaine-guitar-tones-neural-amp-modeler-nam"
+  ],
+  "suggestions": [
+    "Free Neural Amp Modeler captures of a Marshall JCM800 2203 or JVM410 from tone3000.com - load one into NeuralAmpModeler to replace the Nolly amp block; Mustaine's recorded tone is Marshall-flavoured and Nolly's Rhythm channel is a 5150-style approximation.",
+    "OwnHammer G12M-25 'Greenback' 4x12 IR pack - the Mustaine-era sound lives on Celestion Greenbacks in Marshall 4x12s; loading a Greenback IR into Nolly's Cab 1 'Custom IR' slot gets noticeably closer than the stock cab.",
+    "Seymour Duncan SH-4 JB (or similar high-output humbucker) for the Pacifica 012's bridge - the stock humbucker is looser than the Duncans Mustaine used, and a hotter, tighter bridge pickup firms up the palm-muted chugs.",
+    "Free Kiko Loureiro / Megadeth-style Amped captures or Jimi's JCM-style NAM profiles on tone3000 as a second option to A/B against the 2203 captures for the solo voicing."
+  ]
+}

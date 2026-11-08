@@ -1,0 +1,47 @@
+{
+  "song": "Test - Clean Chorus",
+  "artist": "Guitar Buddy",
+  "tuning": "E A D G B E",
+  "sections": [
+    {
+      "name": "Clean chorus",
+      "playing": "Neck pickup, volume 10",
+      "chain": [
+        { "kind": "tuner", "plugin": "VST: ReaTune (Cockos)", "params": [], "confidence": "confirmed" },
+        {
+          "kind": "amp",
+          "plugin": "VST3: Archetype Nolly (Neural DSP)",
+          "params": [
+            { "name": "Amp Type", "value": "Clean" },
+            { "name": "Cab Type", "value": "Clean" },
+            { "name": "Gate", "value": "-70" },
+            { "name": "Clean Gain", "value": "0.35" },
+            { "name": "Clean EQ 500 Hz", "value": "-2.5" },
+            { "name": "Cab 1 Mic IR", "value": "Condenser 414" },
+            { "name": "Reverb Active", "value": "Active" },
+            { "name": "Reverb Decay", "value": "2200" }
+          ],
+          "emulates": "clean amp",
+          "confidence": "guess"
+        },
+        {
+          "kind": "mod",
+          "plugin": "VST3: TAL-Chorus-LX (TAL-Togu Audio Line)",
+          "params": [{ "name": "Dry/Wet", "value": "3" }],
+          "emulates": "Small Clone",
+          "confidence": "guess"
+        },
+        {
+          "kind": "eq",
+          "plugin": "VST: ReaEQ (Cockos)",
+          "params": [
+            { "name": "Freq-Band 2", "value": "1.2 kHz" },
+            { "name": "Gain-Band 2", "value": "+1.5 dB" }
+          ],
+          "confidence": "guess"
+        }
+      ]
+    }
+  ],
+  "sources": []
+}

@@ -1,12 +1,12 @@
-appId: com.pickpulse.timing
-productName: PickPulse
+appId: com.guitarbuddy.app
+productName: Guitar Buddy
 asar: true
 compression: maximum
 directories:
   output: release
 files:
-  - desktop/main.cjs
-  - desktop-dist/**/*
+  - electron/*.cjs
+  - dist/**/*
   - package.json
   - "!node_modules/**/*"
 win:
@@ -14,12 +14,12 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: PickPulse-${version}-portable.${ext}
+  artifactName: GuitarBuddy-${version}-portable.${ext}
 nsis:
-  artifactName: PickPulse-Setup-${version}.${ext}
+  artifactName: GuitarBuddy-Setup-${version}.${ext}
   oneClick: true
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: PickPulse
+  shortcutName: Guitar Buddy
   runAfterFinish: true

@@ -1,49 +1,44 @@
 {
-  "name": "pickpulse-guitar-tempo",
-  "version": "1.2.7",
+  "name": "guitar-buddy",
+  "productName": "Guitar Buddy",
+  "version": "2.0.0",
   "private": true,
-  "main": "desktop/main.cjs",
+  "type": "module",
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
-    "build": "vinext build",
-    "start": "vinext start",
-    "build:desktop": "vite build --config vite.desktop.config.ts",
-    "package:windows": "npm run build:desktop && electron-builder --win portable --x64",
-    "package:installer": "npm run build:desktop && electron-builder --win nsis --x64",
-    "test": "npm run build && node --test \"tests/*.test.mjs\"",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate",
-    "test:audio": "node --test tests/tempo-engine.test.mjs tests/guitar-audio.test.mjs",
-    "test:desktop-audio": "npm run build:desktop && electron tests/desktop-audio-smoke.mjs"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "desktop": "npm run build && electron .",
+    "package:windows": "npm run build && electron-builder --win portable --x64",
+    "package:installer": "npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.2",
-    "next": "16.2.6",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.37.1",
-    "@tailwindcss/postcss": "4.2.1",
+    "@eslint/js": "^10.0.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
-    "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "react-server-dom-webpack": "19.2.6",
-    "tailwindcss": "4.2.1",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
     "typescript": "5.9.3",
-    "vinext": "0.0.50",
+    "typescript-eslint": "^8.72.0",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
-  },
-  "type": "module"
+    "vitest": "^5.0.5"
+  }
 }
