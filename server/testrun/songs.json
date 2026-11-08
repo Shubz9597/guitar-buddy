@@ -1,0 +1,27 @@
+{
+  "_comment": "Test-run songs. file is relative to the music folder (read-only). start/end are m:ss from the owner. kind: lead or riff. tuning: see tabcore.TUNINGS.",
+  "comfortably-numb": {
+    "file": "The Wall (1979)/Pink Floyd - The Wall - 06 - Comfortably Numb.flac",
+    "start": "2:05",
+    "end": "2:40",
+    "kind": "lead",
+    "tuning": "standard",
+    "note": "First solo. Owner: 'roughly 2:05-2:40'. The report's vocals check shows if the edges are off. Official tab exists: save the segment as work/comfortably-numb/reference.txt and pass --reference."
+  },
+  "shesmovedon": {
+    "file": "Lightbulb Sun (2000)/Porcupine Tree - Lightbulb Sun - 04 - Shesmovedon.flac",
+    "start": "3:26",
+    "end": "4:25",
+    "kind": "lead",
+    "tuning": "standard",
+    "note": "Solo. ~400 ms delay on the lead. No tab exists. PROVISIONAL times from sections.py (longest no-vocal stretch with loud guitar); owner to confirm by ear."
+  },
+  "grand-conjuration": {
+    "file": "Ghost Reveries (2005)/Opeth - Ghost Reveries - 07 - The Grand Conjuration.flac",
+    "start": "0:00",
+    "end": "0:25",
+    "kind": "riff",
+    "tuning": "standard",
+    "note": "Opening riff. Replaces Ghost of Perdition as the riff test (owner, 2026-11-08). PROVISIONAL times from sections.py (no vocals until ~1:23; guitar level changes ~0:25); owner to confirm. Tuning not confirmed: the report flags notes below E2."
+  }
+}

@@ -5,3 +5,11 @@ coverage/
 *.log
 .DS_Store
 .env*
+
+# Audio outputs (default lives outside the repo at /srv/guitar-buddy/work; ignored here too in case it moves)
+work/
+
+# Python
+server/.venv/
+__pycache__/
+*.pyc

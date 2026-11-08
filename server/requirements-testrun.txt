@@ -1,0 +1,13 @@
+# Test run (server/testrun/run.py), Python 3.11. Used by server/testrun/Dockerfile.
+# Install torch first from the CUDA 12.6 index (works on CPU too; the GTX 1650 needs only the NVIDIA driver,
+# the wheels bundle the CUDA runtime):
+#   pip install --index-url https://download.pytorch.org/whl/cu126 torch==2.8.0 torchaudio==2.8.0
+#   pip install -r requirements-testrun.txt
+# torch/torchaudio held at 2.8: demucs 4.0.1 uses torchaudio APIs that later releases moved to torchcodec.
+torch==2.8.0
+torchaudio==2.8.0
+demucs==4.0.1
+basic-pitch==0.4.0
+librosa>=0.10
+soundfile>=0.12
+pretty_midi>=0.2.10
