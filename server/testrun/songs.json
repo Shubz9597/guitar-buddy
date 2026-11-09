@@ -3,10 +3,10 @@
   "comfortably-numb": {
     "file": "The Wall (1979)/Pink Floyd - The Wall - 06 - Comfortably Numb.flac",
     "start": "2:05",
-    "end": "2:40",
+    "end": "2:35",
     "kind": "lead",
     "tuning": "standard",
-    "note": "First solo. Owner: 'roughly 2:05-2:40'. The report's vocals check shows if the edges are off. Official tab exists: save the segment as work/comfortably-numb/reference.txt and pass --reference."
+    "note": "First solo. Owner said 2:05-2:40 at first; vocals return at 2:34.8 and the owner confirmed 2:35 (2026-11-09). Reference: /srv/guitar-buddy/work/comfortably-numb/reference.txt (UG fan tab, never commit)."
   },
   "shesmovedon": {
     "file": "Lightbulb Sun (2000)/Porcupine Tree - Lightbulb Sun - 04 - Shesmovedon.flac",

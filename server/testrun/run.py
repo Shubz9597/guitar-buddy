@@ -27,6 +27,7 @@ import csv
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,9 @@ def stage_separate(mix: Path, stems_dir: Path, device: str, segment: float, shif
             continue
         seen.add((dev, seg))
         log(f"separate: demucs htdemucs_6s on {dev}, segment {seg}, shifts {shifts}")
+        # Demucs picks a random time offset per shift (even shifts=1); seed it so reruns give the same stem.
+        random.seed(0)
+        torch.manual_seed(0)
         try:
             with torch.no_grad():
                 out = apply_model(model, x[None], device=dev, shifts=shifts, split=True,
@@ -430,7 +434,7 @@ def main():
     if st.need("clip", base, [mix]):
         stage_clip(src, clip_start, clip_len, mix)
         st.finish()
-    if st.need("separate", {"segment": a.segment, "shifts": a.shifts}, [guitar, stems / "drums.wav", stems / "vocals.wav"]):
+    if st.need("separate", {"segment": a.segment, "shifts": a.shifts, "seed": 0}, [guitar, stems / "drums.wav", stems / "vocals.wav"]):
         st.finish(stage_separate(mix, stems, a.device, a.segment, a.shifts))
     if st.need("pitch", {"v": 1}, [out / "03_basicpitch.json"]):
         stage_pitch(guitar, clip_start, out / "03_basicpitch.json")

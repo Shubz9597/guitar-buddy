@@ -415,6 +415,8 @@ def parse_ascii_tab(text: str, tuning: list[int]):
                 prev = ""
                 for tok in re.finditer(r"\d+|[^\d]", body):
                     s = tok.group(0)
+                    if s in "()":
+                        continue  # brackets are transparent: 14b(15)r(14) is one note, (12) a ghost note
                     if s.isdigit():
                         if prev not in ("b", "r"):
                             events.append((system, offset + tok.start(), string, int(s)))

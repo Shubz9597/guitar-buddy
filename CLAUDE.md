@@ -78,7 +78,10 @@ These override `docs/product-spec.md` where they differ.
 
 - OK: Node 24.21 / npm 11.19 (`npm test` 91/91 pass), Docker 29.7 (user in `docker` group), ffmpeg, librubberband libs, 347 GB free on `/`.
 - Host Python is 3.14 only. **Python work runs in Docker** (`python:3.11-slim-bookworm`, image `guitar-buddy-testrun`): the session user has no passwordless sudo, so dnf installs need the owner, and GitHub downloads (uv's Python builds) returned 504 from this host. PyPI, download.pytorch.org, Docker Hub and dl.fbaipublicfiles.com (Demucs weights) work.
-- Needs sudo (owner runs it): `sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda rubberband`, then the NVIDIA Container Toolkit (NVIDIA's own repo; not in Fedora/RPM Fusion) for `--gpus all`. `docker-run.sh` switches to the GPU by itself once `nvidia-ctk` and `nvidia-smi` work.
+- Installed by the owner 2026-11-09: `akmod-nvidia` + `xorg-x11-drv-nvidia-cuda` 615.71.09 (kmod built and signed by the local akmods key for 7.2.7 and 7.2.15), `rubberband` CLI. The akmods key is queued with `mokutil --import`; **the GPU works only after the owner approves it at the laptop on the next reboot** (blue MOK screen: Enroll MOK -> Continue -> Yes -> password). Until then nouveau stays loaded and everything runs on CPU. Check with `modinfo -F signer nvidia`, `lsmod | grep nvidia`, `nvidia-smi`.
+- Still missing: NVIDIA Container Toolkit (NVIDIA's own repo; not in Fedora/RPM Fusion) for `--gpus all`. `docker-run.sh` switches to the GPU by itself once `nvidia-ctk` and `nvidia-smi` work.
+- **Suspend**: the GDM login screen has its own power settings (suspend after 15 min idle) and suspended the server at 01:16 on 2026-11-09 while nobody was logged in at the seat, freezing SSH sessions. Fixed: `sleep/suspend/hibernate/hybrid-sleep.target` are masked. The lid is ignored via `/etc/systemd/logind.conf.d/server.conf`; the two header-less lines in `/etc/systemd/logind.conf` are ignored by logind and harmless.
+- sudo needs the owner's password: hand them exact commands, one at a time (pasted blocks get eaten by dnf's `[y/N]` prompt).
 - **SELinux is enforcing** and the music folder carries the music server's container label (`container_file_t:s0:c72,c523`). Never mount it with `:z`/`:Z` (relabels it, can break the music server). `docker-run.sh` uses `--security-opt label=disable` and mounts it `:ro`.
 - **Secure Boot is on**: the akmod-built NVIDIA module must be signed and its key enrolled with `mokutil` at a reboot (needs a keyboard and screen at the laptop), or Secure Boot turned off in firmware. Until then the GPU is unusable and Demucs runs on CPU.
 - No separate CUDA toolkit needed: the PyTorch cu126 wheels bundle the CUDA runtime and only need the driver.
@@ -107,6 +110,7 @@ It clips segment ±5 s (separating the clip, not the whole song, keeps it fast o
 | Song (segment) | Tab notes | Unsure | pYIN agrees with Basic Pitch |
 |---|---|---|---|
 | Comfortably Numb (2:05-2:40) | 71 | 46% | 35/68 |
+| Comfortably Numb (2:05-2:35, seeded, scored) | 60 | 37% | see score below |
 | Shesmovedon (3:26-4:25, provisional) | 179 | 87% | 12/167, 53 octave mismatches |
 | Grand Conjuration (0:00-0:25, provisional) | 145 | 50% | 25/96 |
 
@@ -115,11 +119,14 @@ Which stage fails:
 - **pYIN only half-works on these stems** (polyphonic). Use its HMM voiced decision, not `voiced_prob` (median 0.01-0.18 here; a 0.5 cutoff made every note "unvoiced").
 - **Delay (Shesmovedon) breaks both pitch stages**: echoes become extra notes and pYIN jumps octaves. Next generic fix to try: an echo filter (drop a same-pitch, quieter note ~one delay time after another; estimate the delay time from the stem's autocorrelation).
 - **The vocals check works**: on CN, vocals come back at 2:34.8, so the solo ends ~2:35, not 2:40.
-- Not scored yet: needs the owner's reference tab for CN in `/srv/guitar-buddy/work/comfortably-numb/reference.txt`.
+- **Score, CN solo 1 (2:05-2:35) vs a fan tab** (Ultimate Guitar, redwing_suck, 4.6/199; typed in from the owner's screenshots into `work/comfortably-numb/reference.txt`, 58 notes): **60% of reference notes found in order, precision 58%, same string+fret 34%.** Misses: bends come out as extra notes (`e14b(15)r(14)` -> F#5 G5 F#5), the fast run `D14/12-11-9-7`, and the last phrase on the D string (A3-C4), which sits in the rhythm guitars' register. Next generic fixes: merge contiguous 1-2 semitone steps into one bent note; stronger fret-position prior (the mapper flips between equal-cost parallel positions, e.g. F#5 at e14 vs B19).
+- Demucs applies a random time offset per shift even with `shifts=1`, so unseeded reruns gave different stems, notes and fret choices (string+fret match swung 3% <-> 54%). `stage_separate` now seeds `random`/`torch`; two reruns give identical notes.
+- CN's end is 2:35 (owner confirmed; vocals return at 2:34.8).
 - Image is 13 GB because basic-pitch pulled full TensorFlow; switching it to its ONNX backend would shrink it.
 
 ## Other open work
 
+- **Later (owner, 2026-11-09):** use the vocals and the rhythm/chord progression too, not just the lead: e.g. vocal timing for sections, chords under the solo (would also help tell lead from rhythm notes and pick the key).
 - Timing pass 2 (only when asked): muted bars with drift measurement while the click is silent; practice timer and session summary.
 - Tone: per-artist memory of confirmed facts; a 5-6 song test set graded from the research logs (`%APPDATA%\Guitar Buddy\tone-research` on the PC).
 

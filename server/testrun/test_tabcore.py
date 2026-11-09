@@ -149,6 +149,19 @@ E|-------------------|
         notes = tc.parse_ascii_tab(tab, self.STD)
         self.assertEqual([(n["string"], n["fret"]) for n in notes], [(4, 15), (4, 15), (3, 14), (3, 16)])
 
+    def test_parse_bracketed_bends(self):
+        # Ultimate Guitar style: bend targets in brackets, a pull-off after the release, a ghost-note pre-bend.
+        tab = """
+e|-x--14b(15)r(14)p12----------------|
+B|--------------------15b(17)~~~-----|
+G|---------------------------(11)b(12)|
+D|-----------------------------------|
+A|-----------------------------------|
+E|-----------------------------------|
+"""
+        notes = tc.parse_ascii_tab(tab, self.STD)
+        self.assertEqual([(n["string"], n["fret"]) for n in notes], [(5, 14), (5, 12), (4, 15), (3, 11)])
+
     def test_score(self):
         ref = [{"midi": m, "string": 4, "fret": m - 59} for m in [74, 76, 78, 76, 74]]
         ours = [dict(r) for r in ref]
