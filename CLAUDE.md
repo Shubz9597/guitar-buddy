@@ -170,6 +170,7 @@ Then the fret-mapper weights were swept (`tabcore.COST`, judged by the weaker so
 | Comfortably Numb | 64% / **80%** / **84%** | 60 / 69 / 77 |
 | Grand Conjuration | **94%** / 68% / 77% | 61 / 64 / 72 |
 
+MuScriptor **large** tested on CN (CPU): 9.7 min for 40 s of audio and worse (60/76/63), so medium stays; maybe retry on the GPU.
 Left to reach the goal: CN recall (the fast run D14/12-11-9-7 and the low D-string phrase are not in MuScriptor's output in any class),
 GC precision (68%), GC string+fret (77%).
 
