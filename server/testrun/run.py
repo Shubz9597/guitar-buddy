@@ -153,6 +153,36 @@ def stage_separate(mix: Path, stems_dir: Path, device: str, segment: float, shif
     return {"device": dev, "segment": seg}
 
 
+def channel_wav(guitar: Path, channel: str) -> Path:
+    """The guitar stem as-is ('both'), or one side of it as a mono file next to it ('left'/'right').
+
+    Bands often record two guitars panned hard left and right (Opeth: two different parts at once); one side
+    then holds one part, which transcribes far cleaner than both mixed together.
+    """
+    if channel == "both":
+        return guitar
+    import soundfile as sf
+
+    side = guitar.with_name(f"guitar_{channel}.wav")
+    if not side.exists() or side.stat().st_mtime < guitar.stat().st_mtime:
+        y, sr = sf.read(str(guitar), dtype="float32", always_2d=True)
+        sf.write(str(side), y[:, 0 if channel == "left" else 1], sr, subtype="FLOAT")
+    return side
+
+
+def stereo_correlation(guitar: Path, clip_start: float, seg_start: float, seg_end: float) -> float | None:
+    """L/R correlation of the guitar stem over the segment: ~1 = one centred guitar, ~0 = two different
+    guitars panned apart."""
+    import numpy as np
+    import soundfile as sf
+
+    y, sr = sf.read(str(guitar), dtype="float32", always_2d=True)
+    y = y[max(int((seg_start - clip_start) * sr), 0):max(int((seg_end - clip_start) * sr), 0)]
+    if y.shape[1] < 2 or len(y) < sr:
+        return None
+    return float(np.corrcoef(y[:, 0], y[:, 1])[0, 1])
+
+
 def stage_pitch(guitar: Path, clip_start: float, out: Path):
     from basic_pitch import ICASSP_2022_MODEL_PATH
     from basic_pitch.inference import predict
@@ -173,14 +203,19 @@ def stage_pitch(guitar: Path, clip_start: float, out: Path):
     midi_data.write(str(out.with_suffix(".mid")))
 
 
-def stage_pyin(guitar: Path, clip_start: float, seg_start: float, seg_end: float, out: Path):
+def stage_pyin(guitar: Path, clip_start: float, seg_start: float, seg_end: float, out: Path,
+               midi_range: tuple[int, int] | None = None):
+    """pYIN pitch track of the guitar stem. midi_range limits it to the lead's register so it cannot
+    latch onto rhythm guitars in the same stem (on Shesmovedon it followed the rhythm parts at ~E3)."""
     import librosa
     import numpy as np
 
     offset = max(seg_start - 0.5 - clip_start, 0.0)
     y, sr = librosa.load(str(guitar), sr=22050, mono=True, offset=offset, duration=seg_end - seg_start + 1.0)
     hop = 256
-    f0, _, prob = librosa.pyin(y, fmin=60, fmax=1500, sr=sr, frame_length=2048, hop_length=hop)
+    fmin, fmax = (60.0, 1500.0) if midi_range is None else (float(librosa.midi_to_hz(midi_range[0])),
+                                                             float(librosa.midi_to_hz(midi_range[1])))
+    f0, _, prob = librosa.pyin(y, fmin=fmin, fmax=fmax, sr=sr, frame_length=2048, hop_length=hop)
     times = librosa.times_like(f0, sr=sr, hop_length=hop) + clip_start + offset
     with out.open("w", newline="") as fh:
         w = csv.writer(fh)
@@ -188,6 +223,18 @@ def stage_pyin(guitar: Path, clip_start: float, seg_start: float, seg_end: float
         for t, f, p in zip(times, f0, prob):
             ok = f is not None and not np.isnan(f)
             w.writerow([f"{t:.4f}", f"{f:.2f}" if ok else "", f"{librosa.hz_to_midi(f):.3f}" if ok else "", f"{p:.3f}"])
+
+
+def lead_pitch_range(basicpitch_json: Path, seg_start: float, seg_end: float):
+    """MIDI range for pYIN in lead mode: the lead line's 5th-95th percentile, 3 semitones below
+    (slides) and 4 above (bends). None if there are too few notes to tell."""
+    raw = json.loads(basicpitch_json.read_text())
+    notes = [dict(n, flags=[], bend_to=None) for n in raw if seg_start <= n["t"] < seg_end]
+    kept, _ = tc.lead_filter(notes)
+    if len(kept) < 10:
+        return None
+    ps = sorted(n["midi"] for n in kept)
+    return [ps[len(ps) // 20] - 3, ps[-(len(ps) // 20) - 1] + 4]
 
 
 def stage_beats(drums: Path, mix: Path, clip_start: float, out: Path):
@@ -249,24 +296,21 @@ def spans(times_flags, win):
 
 
 def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Path, mix: Path, reference: Path | None,
-              use_lead_filter: bool = True):
+              use_lead_filter: bool = True, channel: str = "both"):
     raw = json.loads((out / "03_basicpitch.json").read_text())
-    notes = [dict(n, flags=[], bend_to=None) for n in raw if seg_start <= n["t"] < seg_end]
-    n_raw = len(notes)
-    lf_counts = None
-    if kind == "lead" and use_lead_filter:
-        notes, lf_counts = tc.lead_filter(notes)
-    groups = tc.group_notes(notes)
     f0_times, f0_midi, prob = load_pyin(out / "04_pyin.csv")
-    pyin_stats = tc.reconcile_with_pyin(groups, f0_times, f0_midi, prob)
-    mapped, dropped = tc.map_frets(groups, tuning, kind=kind)
+    seg_notes = [n for n in raw if seg_start <= n["t"] < seg_end]
+    mapped, dropped, info = tc.transcribe(seg_notes, f0_times, f0_midi, prob, tuning, kind=kind,
+                                          use_lead_filter=use_lead_filter)
+    n_raw, lf_counts, pyin_stats = info["raw"], info["lead_filter"], info["pyin"]
     beats = json.loads((out / "05_beats.json").read_text())
     slots, grid_bpm = tc.sixteenth_grid(beats["beats"], seg_start, seg_end)
     placed = tc.place_on_grid(mapped, slots)
     tab_text = tc.render_tab(placed, slots, tuning)
     final = [n for g in mapped for n in g]
 
-    header = (f"# {out.name}: {tc.fmt_time(seg_start)}-{tc.fmt_time(seg_end)}, {kind}, tuning "
+    side = "" if channel == "both" else f", {channel} channel only"
+    header = (f"# {out.name}: {tc.fmt_time(seg_start)}-{tc.fmt_time(seg_end)}, {kind}{side}, tuning "
               f"{' '.join(tc.midi_to_name(m) for m in tuning)}, ~{grid_bpm:.0f} BPM grid\n"
               f"# DRAFT. '?' under a note = unsure. Bar lines assume 4/4 starting on the beat at the segment start.\n\n")
     (out / "06_tab.txt").write_text(header + tab_text)
@@ -323,9 +367,13 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
         "",
         f"- Basic Pitch notes in segment: {n_raw}",
         (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes, dropped {lf_counts['under_lead']} under "
-         f"the lead and {lf_counts['below_register']} quiet low notes -> {len(notes)} notes" if lf_counts is not None
+         f"the lead and {lf_counts['below_register']} quiet low notes" if lf_counts is not None
          else "- Lead filter: off"),
-        f"- Onsets after grouping chords: {len(groups)}",
+        (f"- Delay echoes: repeat every {info['echo_delay'] * 1000:.0f} ms found, {info['echoes']} echo notes dropped"
+         if info["echo_delay"] else "- Delay echoes: no delay pattern found"),
+        f"- Bends: {info['bends_merged']} bend/release pieces folded into their bent note",
+        f"- pYIN reads {info['pyin_offset']:+.2f} semitones off equal temperament (band tuning); corrected for",
+        f"- Notes after cleanup: {info['notes']}; onsets after grouping chords: {info['groups']}",
         f"- In the tab: {len(final)} notes, {unsure} marked unsure ({100 * unsure / max(len(final), 1):.0f}%)",
         f"- Dropped (no fret position on this tuning): {len(dropped)}",
         f"- pYIN agreed with Basic Pitch on {pyin_stats['agree']} of {pyin_stats['checked']} single notes checked",
@@ -347,6 +395,15 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
     else:
         lines.append("- Vocals stem is quiet for the whole segment (good for a solo).")
     lines.append(f"- Guitar stem level vs mix: {gshare:.2f} (near 0 = Demucs did not find the guitar).")
+    corr = stereo_correlation(stems / "guitar.wav", clip_start, seg_start, seg_end)
+    if corr is not None:
+        if corr < 0.5:
+            lines.append(f"- **Guitar stem is wide (L/R correlation {corr:.2f})**: probably two guitars panned apart, "
+                         f"maybe playing different parts. This tab used: {channel}. "
+                         "Try `--channel left` and `--channel right` to get one part each.")
+        else:
+            lines.append(f"- Guitar stem L/R correlation {corr:.2f}: mostly one centred guitar sound "
+                         f"(this tab used: {channel}).")
 
     if reference:
         ref_notes = tc.parse_ascii_tab(reference.read_text(), tuning)
@@ -388,6 +445,8 @@ def main():
     ap.add_argument("--shifts", type=int, default=1, help="Demucs shifts (more = slower, slightly better)")
     ap.add_argument("--reference", type=Path, help="ASCII tab of the segment to score against")
     ap.add_argument("--no-lead-filter", action="store_true", help="lead mode: keep every Basic Pitch note")
+    ap.add_argument("--channel", choices=["both", "left", "right"],
+                    help="transcribe both sides of the guitar stem (default) or one side (two guitars panned apart)")
     ap.add_argument("--force-from", choices=CACHED_STAGES)
     ap.add_argument("--music-dir", type=Path, default=MUSIC_DIR)
     ap.add_argument("--work-dir", type=Path, default=WORK_DIR)
@@ -396,11 +455,12 @@ def main():
     cfg = dict(songs.get(a.song, {})) if a.song else {}
     if a.song and a.song not in songs:
         ap.error(f"unknown song {a.song!r}")
-    for key in ("file", "start", "end", "kind", "tuning"):
+    for key in ("file", "start", "end", "kind", "tuning", "channel"):
         if getattr(a, key):
             cfg[key] = getattr(a, key)
     cfg.setdefault("kind", "lead")
     cfg.setdefault("tuning", "standard")
+    cfg.setdefault("channel", "both")
     name = a.name or a.song
     missing = [k for k in ("file", "start", "end") if not cfg.get(k)]
     if missing or not name:
@@ -436,11 +496,16 @@ def main():
         st.finish()
     if st.need("separate", {"segment": a.segment, "shifts": a.shifts, "seed": 0}, [guitar, stems / "drums.wav", stems / "vocals.wav"]):
         st.finish(stage_separate(mix, stems, a.device, a.segment, a.shifts))
-    if st.need("pitch", {"v": 1}, [out / "03_basicpitch.json"]):
-        stage_pitch(guitar, clip_start, out / "03_basicpitch.json")
+    source = channel_wav(guitar, cfg["channel"])
+    pitch_params = {"v": 1} if cfg["channel"] == "both" else {"v": 1, "channel": cfg["channel"]}
+    if st.need("pitch", pitch_params, [out / "03_basicpitch.json"]):
+        stage_pitch(source, clip_start, out / "03_basicpitch.json")
         st.finish()
-    if st.need("pyin", {"seg": [seg_start, seg_end]}, [out / "04_pyin.csv"]):
-        stage_pyin(guitar, clip_start, seg_start, seg_end, out / "04_pyin.csv")
+    midi_range = None
+    if cfg["kind"] == "lead" and not a.no_lead_filter:
+        midi_range = lead_pitch_range(out / "03_basicpitch.json", seg_start, seg_end)
+    if st.need("pyin", {"seg": [seg_start, seg_end], "midi_range": midi_range}, [out / "04_pyin.csv"]):
+        stage_pyin(source, clip_start, seg_start, seg_end, out / "04_pyin.csv", midi_range)
         st.finish()
     if st.need("beats", {"v": 1}, [out / "05_beats.json"]):
         stage_beats(stems / "drums.wav", mix, clip_start, out / "05_beats.json")
@@ -449,7 +514,7 @@ def main():
     STAGE_INFO["separate"] = st.info("separate")
     STAGE_TIMES.update(st.timings)
     tab = build_tab(out, seg_start, seg_end, cfg["kind"], tuning, clip_start, stems, mix, a.reference,
-                    use_lead_filter=not a.no_lead_filter)
+                    use_lead_filter=not a.no_lead_filter, channel=cfg["channel"])
     print("\n" + tab)
     log(f"report: {out / '07_report.md'}")
     log(f"guitar stem: {guitar}")

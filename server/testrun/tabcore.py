@@ -92,10 +92,11 @@ def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
 
     1. Merge back-to-back notes of the same pitch (gap < 15 ms): Basic Pitch re-triggers held notes
        with vibrato; real repeated picks leave a gap.
+    1b. If the notes show a delay pedal (find_echo_delay), drop the quieter repeats (echo_filter).
     2. Skyline: drop a note if a note >= 3 semitones higher covers >= 50% of it (accompaniment under the lead).
     3. Register: drop notes more than an octave below the lead's median pitch that are also quieter
        than 70% of the lead's median amplitude (rhythm parts while the lead rests).
-    Returns (kept, counts).
+    Returns (kept, counts); counts also carries echo_delay (seconds or None) and echoes (dropped).
     """
     counts = {"merged": 0, "under_lead": 0, "below_register": 0}
     by_pitch: dict[int, dict] = {}
@@ -109,6 +110,13 @@ def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
             continue
         merged.append(n)
         by_pitch[n["midi"]] = n
+
+    # Delay echoes go before the skyline: an echo of a high note overlapping the next, lower, real note
+    # would otherwise hide that real note as "under the lead".
+    counts["echo_delay"] = find_echo_delay(merged)
+    counts["echoes"] = 0
+    if counts["echo_delay"] is not None:
+        merged, counts["echoes"] = echo_filter(merged, counts["echo_delay"])
 
     def covered(low):
         dur = low["end"] - low["t"]
@@ -129,13 +137,146 @@ def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
     return kept, counts
 
 
-def reconcile_with_pyin(groups, f0_times, f0_midi, voiced_prob, quiet_amp=0.3, min_prob=0.0):
+MAX_BEND = 3  # semitones; real bends are 1-2, rarely 3. A bigger "bend" is another note or a pitch-track jump.
+
+
+def _track(f0_times, f0_midi, t0, t1, offset=0.0):
+    """pYIN frames in [t0, t1] as a list of pitch-or-None, shifted by the tuning offset."""
+    lo, hi = bisect.bisect_left(f0_times, t0), bisect.bisect_right(f0_times, t1)
+    return [None if f0_midi[i] is None else f0_midi[i] - offset for i in range(lo, hi)]
+
+
+def pyin_offset(notes, f0_times, f0_midi):
+    """How far pYIN reads sharp/flat of the equal-tempered notes (the band's tuning, ~+0.2 on The Wall).
+
+    Median of (pYIN pitch - note pitch) over notes where the two roughly agree; 0 without evidence.
+    """
+    diffs = []
+    for n in notes:
+        mid = [m for m in _track(f0_times, f0_midi, n["t"] + 0.03, n["end"] - 0.02) if m is not None]
+        if len(mid) >= 3:
+            d = statistics.median(mid) - n["midi"]
+            if abs(d) < 0.5:
+                diffs.append(d)
+    return max(-0.5, min(0.5, statistics.median(diffs))) if len(diffs) >= 5 else 0.0
+
+
+def is_glide(f0_times, f0_midi, t0, t1, a, b, offset=0.0):
+    """The pYIN track in [t0, t1] slides between pitches a and b instead of stepping.
+
+    A bend passes through the pitches in between (several frames at 11.6 ms); a hammer-on, pull-off or
+    new pick jumps straight from one pitch to the next (at most one frame in between).
+    """
+    lo, hi = min(a, b), max(a, b)
+    track = [m for m in _track(f0_times, f0_midi, t0, t1, offset) if m is not None]
+    between = sum(1 for m in track if lo + 0.25 < m < hi - 0.25)
+    near = sum(1 for m in track if lo - 0.5 < m < hi + 0.5)
+    return between >= 2 and near >= 0.6 * len(track)
+
+
+def merge_bends(notes, f0_times, f0_midi, offset=0.0, max_gap=0.05):
+    """Lead mode: fold the pieces of a bend back into one note.
+
+    Basic Pitch writes a bend-and-release (14b15r14) as three notes F#5 G5 F#5 back to back. When the next
+    note starts right as the previous one ends, sits 1..MAX_BEND semitones above the bent note, and pYIN
+    shows a continuous glide between them, it becomes part of the earlier note: bend_to = highest pitch
+    reached, release_to = pitch it came back down to. Returns (notes, number_merged).
+    """
+    out: list[dict] = []
+    merged = 0
+    for n in sorted(notes, key=lambda n: n["t"]):
+        cur = out[-1] if out else None
+        if cur is not None and -0.05 <= n["t"] - cur["end"] <= max_gap:
+            now = cur.get("release_to") or cur.get("bend_to") or cur["midi"]
+            in_range = cur["midi"] <= n["midi"] <= cur["midi"] + MAX_BEND and n["midi"] != now
+            if in_range and is_glide(f0_times, f0_midi, n["t"] - 0.12, n["t"] + 0.12, now, n["midi"], offset):
+                if n["midi"] > now:
+                    cur["bend_to"] = max(cur.get("bend_to") or cur["midi"], n["midi"])
+                    cur.pop("release_to", None)
+                else:
+                    cur["release_to"] = n["midi"]
+                cur["end"] = max(cur["end"], n["end"])
+                cur["amp"] = max(cur["amp"], n["amp"])
+                if "bend" not in cur["flags"]:
+                    cur["flags"].append("bend")
+                merged += 1
+                continue
+        out.append(n)
+    return out, merged
+
+
+def find_echo_delay(notes, lo=0.2, hi=0.8, tol=0.02):
+    """Delay-pedal repeat time in seconds, or None.
+
+    With a delay every note comes back quieter at the same pitch D later, and again at 2D. Take the notes in
+    the upper half of the pitch range (the lead; rhythm parts below drown the pattern), collect the time from
+    each note to later, quieter notes of the same pitch, and look for a D in [lo, hi] where both D and 2D are
+    clearly more common than chance. Beat patterns rarely give that pair at a non-beat time. On Shesmovedon
+    this finds ~0.40 s (the owner reports a ~400 ms delay); on Comfortably Numb it finds nothing.
+    """
+    if len(notes) < 20:
+        return None
+    med = statistics.median(n["midi"] for n in notes)
+    top = sorted((n for n in notes if n["midi"] >= med), key=lambda n: n["t"])
+    far = 2 * hi + tol
+    diffs = []
+    for i, a in enumerate(top):
+        for b in top[i + 1:]:
+            dt = b["t"] - a["t"]
+            if dt > far:
+                break
+            if dt >= lo - tol and b["midi"] == a["midi"] and b["amp"] < a["amp"]:
+                diffs.append(dt)
+    if len(diffs) < 20:
+        return None
+    chance = len(diffs) * 2 * tol / (far - lo + tol)  # expected count in a +-tol window if times were random
+
+    def near(c):
+        return [d for d in diffs if abs(d - c) <= tol]
+
+    best, best_score = None, 0.0
+    c = lo
+    while c <= hi:
+        one, two = len(near(c)), len(near(2 * c))
+        if one >= max(6, 1.6 * chance) and two >= 1.3 * chance and one + two > best_score:
+            best, best_score = c, one + two
+        c += 0.005
+    if best is None:
+        return None
+    pts = near(best) + [d / 2 for d in near(2 * best)]
+    return statistics.median(pts)
+
+
+def echo_filter(notes, delay, tol=0.03, max_ratio=0.9):
+    """Drop notes that are a delay repeat of an earlier note: same pitch, `delay` (or 2x) later, quieter."""
+    srt = sorted(notes, key=lambda n: n["t"])
+    starts = [n["t"] for n in srt]
+    kept, dropped = [], 0
+    for n in srt:
+        echo = False
+        for mult in (1, 2):
+            t0 = n["t"] - mult * delay
+            for j in range(bisect.bisect_left(starts, t0 - tol), bisect.bisect_right(starts, t0 + tol)):
+                src = srt[j]
+                if src is not n and src["midi"] == n["midi"] and n["amp"] <= max_ratio * src["amp"]:
+                    echo = True
+                    break
+            if echo:
+                break
+        if echo:
+            dropped += 1
+        else:
+            kept.append(n)
+    return kept, dropped
+
+
+def reconcile_with_pyin(groups, f0_times, f0_midi, voiced_prob, quiet_amp=0.3, min_prob=0.0, offset=0.0):
     """Cross-check single notes against the pYIN pitch track and estimate bends.
 
     f0_midi entries are float MIDI or None (unvoiced). A frame counts as voiced when pYIN's own HMM
     decision gave it a pitch; its voiced_prob is tiny on busy stems (median ~0.01 on Shesmovedon), so
-    min_prob defaults to 0. Chords are not checked (pYIN only follows one pitch). Mutates the notes,
-    returns per-note stats.
+    min_prob defaults to 0. `offset` is the band's tuning offset from pyin_offset(). Chords are not
+    checked (pYIN only follows one pitch). Mutates the notes, returns per-note stats.
     """
     stats = {"checked": 0, "agree": 0}
     for group in groups:
@@ -147,7 +288,7 @@ def reconcile_with_pyin(groups, f0_times, f0_midi, voiced_prob, quiet_amp=0.3, m
         n = group[0]
         lo = bisect.bisect_left(f0_times, n["t"] + 0.02)
         hi = bisect.bisect_right(f0_times, max(n["end"] - 0.01, n["t"] + 0.03))
-        frames = [(f0_midi[i], voiced_prob[i]) for i in range(lo, hi)]
+        frames = [(None if f0_midi[i] is None else f0_midi[i] - offset, voiced_prob[i]) for i in range(lo, hi)]
         if not frames:
             continue
         voiced = [m for m, p in frames if m is not None and p >= min_prob]
@@ -155,21 +296,63 @@ def reconcile_with_pyin(groups, f0_times, f0_midi, voiced_prob, quiet_amp=0.3, m
         if len(voiced) < 0.3 * len(frames) or len(voiced) < 2:
             n["flags"].append("pyin-unvoiced")
             continue
-        head = voiced[: max(2, len(voiced) // 4)]
+        head = voiced[: max(2, min(len(voiced) // 4, 8))]
         start_pitch = statistics.median(head)
         n["pyin_midi"] = round(start_pitch, 2)
         diff = start_pitch - n["midi"]
         if abs(diff) >= 11.5 and abs(diff - 12 * round(diff / 12)) < 0.6:
             n["flags"].append("octave?")
-        elif abs(diff) >= 0.6:
+            continue
+        if abs(diff) >= 0.6:
             n["flags"].append("pitch-disagree")
-        else:
-            stats["agree"] += 1
-        peak = max(voiced)
-        if peak - start_pitch >= 0.8 and round(peak) > n["midi"]:
-            n["bend_to"] = int(round(peak))
+            continue
+        stats["agree"] += 1
+        if n.get("bend_to") is not None:
+            continue  # already set by merge_bends
+        # Bend: follow the track from the start while it moves smoothly (no frame-to-frame jump), so a
+        # later note, another guitar or an octave slip cannot pass for a bend (that gave "2b10").
+        peak = prev = start_pitch
+        started = False
+        for m, p in frames:
+            if m is None or p < min_prob:
+                if started:
+                    break
+                continue
+            if not started:
+                started = abs(m - start_pitch) < 0.5
+                prev = m
+                continue
+            if abs(m - prev) > 0.45:
+                break
+            peak, prev = max(peak, m), m
+        bend = round(peak - start_pitch)
+        if peak - start_pitch >= 0.8 and 1 <= bend <= MAX_BEND:
+            n["bend_to"] = n["midi"] + bend
             n["flags"].append("bend")
     return stats
+
+
+def transcribe(notes, f0_times, f0_midi, voiced_prob, tuning, kind="lead", use_lead_filter=True):
+    """The whole note-to-fret step: cleanup, bends, pYIN check, fret mapping.
+
+    `notes` are Basic Pitch notes of the segment (dicts with t, end, midi, amp). Returns
+    (mapped_groups, dropped_notes, info) where info holds counts for the report.
+    """
+    notes = [dict(n, flags=list(n.get("flags", [])), bend_to=n.get("bend_to")) for n in notes]
+    info = {"raw": len(notes), "lead_filter": None, "echo_delay": None, "echoes": 0, "bends_merged": 0}
+    offset = pyin_offset(notes, f0_times, f0_midi)
+    info["pyin_offset"] = round(offset, 2)
+    if kind == "lead" and use_lead_filter:
+        notes, info["lead_filter"] = lead_filter(notes)
+        info["echo_delay"] = info["lead_filter"]["echo_delay"]
+        info["echoes"] = info["lead_filter"]["echoes"]
+        notes, info["bends_merged"] = merge_bends(notes, f0_times, f0_midi, offset)
+    info["notes"] = len(notes)
+    groups = group_notes(notes)
+    info["groups"] = len(groups)
+    info["pyin"] = reconcile_with_pyin(groups, f0_times, f0_midi, voiced_prob, offset=offset)
+    mapped, dropped = map_frets(groups, tuning, kind=kind)
+    return mapped, dropped, info
 
 
 # ---------------------------------------------------------------- fret mapping
@@ -194,32 +377,49 @@ def group_states(group, tuning, max_fret, max_span=5):
     return states
 
 
-def _hand_pos(state):
+def hand_positions(state, max_fret):
+    """Hand positions (fret under the index finger) that can play `state`.
+
+    Fingers cover p..p+3; p-1 and p+4 are reachable with a stretch. Open strings fit any position, so an
+    open note keeps the hand where it was instead of resetting it.
+    """
     fretted = [f for _, f in state if f > 0]
-    return sum(fretted) / len(fretted) if fretted else None
+    if not fretted:
+        return list(range(1, max_fret - 2))
+    lo, hi = min(fretted), max(fretted)
+    return [p for p in range(max(1, hi - 4), lo + 2) if p <= max_fret - 3]
 
 
-def _state_cost(state, kind):
-    cost = 0.0
+def _state_cost(state, pos, kind):
+    cost = 0.02 * pos  # tie-break: of two equal shapes, the lower one on the neck
     fretted = [f for _, f in state if f > 0]
     if fretted:
-        cost += 0.3 * (max(fretted) - min(fretted))
-    for _, f in state:
-        if f == 0 and kind == "lead":
-            cost += 2.0  # leads are mostly fretted; riffs use open strings freely
+        cost += 0.15 * (max(fretted) - min(fretted))
+    for s, f in state:
+        if f == 0:
+            if kind == "lead":
+                cost += 2.0  # leads are mostly fretted; riffs use open strings freely
+            continue
+        if f < pos or f > pos + 3:
+            cost += 0.4  # stretch
         if f > 17:
             cost += 0.1 * (f - 17)
+        if kind == "lead" and s <= 2 and f > 12:
+            # High up on the wound strings is rare in solos; the same note sits lower on a higher string.
+            # Mostly true for the low E and A strings; the D string still gets used up to ~14.
+            cost += (0.25 if s <= 1 else 0.1) * (f - 12)
     return cost
 
 
-def _move_cost(a, b, gap, kind):
-    pa, pb = _hand_pos(a), _hand_pos(b)
+def _move_cost(a, pa, b, pb, gap, kind):
+    """Cost of going from shape a at hand position pa to shape b at pb, `gap` seconds apart."""
     cost = 0.0
-    if pa is not None and pb is not None:
-        jump = abs(pa - pb)
-        cost += jump / (1.0 + 2.0 * max(gap, 0.0))  # more time between notes = shifts are easier
-        if jump > 4:
-            cost += 1.5
+    shift = abs(pa - pb)
+    if shift:
+        ease = 1.0 + 2.0 * max(gap, 0.0)  # more time between notes = shifts are easier
+        cost += 0.5 + 0.4 * shift / ease
+        if shift > 4 and gap < 0.25:
+            cost += 1.0  # big jump with no time to make it
     cost += 0.1 * abs(a[0][0] - b[0][0])
     if kind == "lead" and len(a) == 1 and len(b) == 1 and a[0][0] == b[0][0]:
         cost -= 0.1  # small pull towards staying on a string for runs
@@ -227,7 +427,11 @@ def _move_cost(a, b, gap, kind):
 
 
 def map_frets(groups, tuning, kind="lead", max_fret=22):
-    """Viterbi over chord groups. Fills note['string'], note['fret'].
+    """Viterbi over chord groups and hand positions. Fills note['string'], note['fret'].
+
+    A state is (shape, hand position). Staying in one position is free, notes outside the four-fret box
+    cost a stretch, and moving the hand costs a fixed amount plus the distance (cheaper after a rest).
+    This keeps a phrase in one box instead of flipping between equal-pitch spots (e14 vs B19).
 
     Returns (mapped_groups, dropped_notes): notes with no position on this tuning
     (e.g. below the lowest open string) are dropped and flagged 'out-of-range';
@@ -250,26 +454,26 @@ def map_frets(groups, tuning, kind="lead", max_fret=22):
             group.remove(quietest)
             states = group_states(group, tuning, max_fret) if group else []
         if group:
-            usable.append((group, states))
+            usable.append((group, [(s, p) for s in states for p in hand_positions(s, max_fret)]))
     if not usable:
         return [], dropped
 
     # Viterbi
     first_group, first_states = usable[0]
-    costs = [_state_cost(s, kind) for s in first_states]
+    costs = [_state_cost(s, p, kind) for s, p in first_states]
     back = [[None] * len(first_states)]
     for idx in range(1, len(usable)):
         prev_group, prev_states = usable[idx - 1]
         group, states = usable[idx]
         gap = group[0]["t"] - max(n["end"] for n in prev_group)
         new_costs, pointers = [], []
-        for s in states:
+        for s, p in states:
             best, best_j = None, 0
-            for j, ps in enumerate(prev_states):
-                c = costs[j] + _move_cost(ps, s, gap, kind)
+            for j, (ps, pp) in enumerate(prev_states):
+                c = costs[j] + _move_cost(ps, pp, s, p, gap, kind)
                 if best is None or c < best:
                     best, best_j = c, j
-            new_costs.append(best + _state_cost(s, kind))
+            new_costs.append(best + _state_cost(s, p, kind))
             pointers.append(best_j)
         costs = new_costs
         back.append(pointers)
@@ -277,7 +481,7 @@ def map_frets(groups, tuning, kind="lead", max_fret=22):
     j = min(range(len(costs)), key=costs.__getitem__)
     for idx in range(len(usable) - 1, -1, -1):
         group, states = usable[idx]
-        for n, (s, f) in zip(group, states[j]):
+        for n, (s, f) in zip(group, states[j][0]):
             n["string"], n["fret"] = s, f
         if idx:
             j = back[idx][j]
@@ -342,6 +546,8 @@ def _token(n):
     tok = str(n["fret"])
     if n.get("bend_to") is not None:
         tok += f"b{n['fret'] + n['bend_to'] - n['midi']}"
+        if n.get("release_to") is not None:
+            tok += f"r{n['fret'] + n['release_to'] - n['midi']}"
     return tok
 
 

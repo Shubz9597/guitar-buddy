@@ -95,13 +95,16 @@ A throwaway script (no FastAPI yet): Demucs -> guitar stem -> Basic Pitch + pYIN
 2. Porcupine Tree, "Shesmovedon" (Lightbulb Sun), solo: the real target; ~400 ms delay on the lead, no tab exists.
 3. Opeth, ~~"Ghost of Perdition"~~ **"The Grand Conjuration"** (Ghost Reveries; owner's switch, 2026-11-08), opening riff: tests rhythm riffs.
 
-Status: script written and run on all three (`server/testrun/run.py`, settings per song in `songs.json`). Comfortably Numb 2:05-2:40 ("roughly", per the owner). Shesmovedon and Grand Conjuration times are provisional, picked by `sections.py`; the owner should confirm by ear. Run:
+Status: script written and run on all three (`server/testrun/run.py`, settings per song in `songs.json`). Comfortably Numb 2:05-2:35 (owner confirmed). Shesmovedon and Grand Conjuration times are provisional, picked by `sections.py`; the owner should confirm by ear. Run:
 
 ```bash
 server/testrun/docker-run.sh --build                       # once, or after changing requirements
 server/testrun/docker-run.sh comfortably-numb [--reference /srv/guitar-buddy/work/comfortably-numb/reference.txt]
 server/testrun/docker-run.sh --sections shesmovedon        # whole-song stems + vocal/guitar timeline
+server/testrun/docker-run.sh grand-conjuration --channel right   # one side of a wide (two-guitar) stem
 ```
+
+Quick tuning loop without Docker: the note-to-tab step is `tabcore.transcribe()` (stdlib only), so a few lines of host Python can rerun it from the cached `03_basicpitch.json` / `04_pyin.csv` and score it in well under a second.
 
 It clips segment ±5 s (separating the clip, not the whole song, keeps it fast on a 4 GB GPU or CPU), separates with Demucs (OOM: segment 7 -> 5 -> CPU), runs Basic Pitch + pYIN, maps frets, and writes `06_tab.txt` and `07_report.md` (unsure %, pYIN agreement, notes below the lowest string, whether vocals are loud in the segment, and a score against a pasted ASCII reference tab).
 
@@ -113,13 +116,23 @@ It clips segment ±5 s (separating the clip, not the whole song, keeps it fast o
 | Comfortably Numb (2:05-2:35, seeded, scored) | 60 | 37% | see score below |
 | Shesmovedon (3:26-4:25, provisional) | 179 | 87% | 12/167, 53 octave mismatches |
 | Grand Conjuration (0:00-0:25, provisional) | 145 | 50% | 25/96 |
+| **After round 2 (2026-11-09)** | | | |
+| Comfortably Numb (2:05-2:35) | 51 | 39% | 26/45; score below |
+| Shesmovedon (3:26-4:25) | 177 | 85% | 16/165 |
+| Grand Conjuration (0:00-0:25, left channel) | 123 | 43% | 28/79 |
 
 Which stage fails:
 - **Separation is the main limit.** htdemucs_6s `guitar` holds lead + rhythm guitars + some bass bleed. Without a filter the Comfortably Numb "solo" was mostly D3/A2 rhythm notes. `tabcore.lead_filter` (lead mode, on by default) fixes most of it: merge back-to-back same-pitch notes (Basic Pitch re-triggers held/vibrato notes), drop notes under a higher note, drop quiet notes > 1 octave below the lead. 282 -> 63 notes on CN; the result sits in the expected 14-19 box.
 - **pYIN only half-works on these stems** (polyphonic). Use its HMM voiced decision, not `voiced_prob` (median 0.01-0.18 here; a 0.5 cutoff made every note "unvoiced").
-- **Delay (Shesmovedon) breaks both pitch stages**: echoes become extra notes and pYIN jumps octaves. Next generic fix to try: an echo filter (drop a same-pitch, quieter note ~one delay time after another; estimate the delay time from the stem's autocorrelation).
+- **Shesmovedon is still bad (85% unsure), and the delay is not the main reason.** The echo filter (`find_echo_delay` + `echo_filter`) finds the delay at 0.42 s (owner: ~400 ms) and drops 17 echoes, but the big problem is that the guitar stem holds ~3.4 notes at once (rhythm guitars and the lead in the same register, both centred, L/R correlation 0.88), and pYIN follows the rhythm parts (median ~E3). Limiting pYIN to the lead's range only moved agreement 12 -> 16 of 165. Needs a lead/rhythm split that Demucs does not give (ideas: a lead-guitar separation model, or the owner's chord progression to subtract rhythm notes). Checked 2:35-3:05 as an alternative segment: vocals plus a repeated figure, not the solo.
+- **Grand Conjuration: two guitars panned hard left/right** (L/R correlation 0.06), double-tracking much the same riff. Transcribing one side (`--channel left`) is cleaner (43% unsure vs 52%) and is now the song's setting. Each side alone shows a few D2 notes, so the tuning may be drop-D or D standard: owner to confirm. The report now prints the L/R correlation and suggests `--channel` when the stem is wide.
 - **The vocals check works**: on CN, vocals come back at 2:34.8, so the solo ends ~2:35, not 2:40.
-- **Score, CN solo 1 (2:05-2:35) vs a fan tab** (Ultimate Guitar, redwing_suck, 4.6/199; typed in from the owner's screenshots into `work/comfortably-numb/reference.txt`, 58 notes): **60% of reference notes found in order, precision 58%, same string+fret 34%.** Misses: bends come out as extra notes (`e14b(15)r(14)` -> F#5 G5 F#5), the fast run `D14/12-11-9-7`, and the last phrase on the D string (A3-C4), which sits in the rhythm guitars' register. Next generic fixes: merge contiguous 1-2 semitone steps into one bent note; stronger fret-position prior (the mapper flips between equal-cost parallel positions, e.g. F#5 at e14 vs B19).
+- **Score, CN solo 1 (2:05-2:35) vs a fan tab** (Ultimate Guitar, redwing_suck, 4.6/199; typed in from the owner's screenshots into `work/comfortably-numb/reference.txt`, 58 notes): **60% of reference notes found in order, precision 58%, same string+fret 34%.** Misses: bends come out as extra notes (`e14b(15)r(14)` -> F#5 G5 F#5), the fast run `D14/12-11-9-7`, and the last phrase on the D string (A3-C4), which sits in the rhythm guitars' register. 
+- **Round 2 (2026-11-09): recall 60%, precision 69%, same string+fret 77%** (from 58% / 34%). What changed, all generic:
+  - Bend merge (`merge_bends`): back-to-back notes 1-3 semitones apart become one bent note only when pYIN shows a continuous glide (>= 2 frames in between); a hammer-on jumps. Gives `14b15r14`. pYIN's tuning offset (+0.1 on The Wall) is measured and corrected first.
+  - Bends from pYIN follow the track only while it moves smoothly and are capped at 3 semitones (this was the riff-mode `2b10` bug).
+  - Fret mapper tracks a hand position (index finger fret, 4-fret box, stretch costs, shifts cost a fixed amount plus distance) and penalises high frets on the low E/A strings in solos (A17 -> D12).
+  - Remaining misses: the fast run `D14/12-11-9-7` and the last D-string phrase (A3-C4), both lost under the rhythm guitars; the second half sits in a 12th-fret box where the tab uses the 7th (both are playable).
 - Demucs applies a random time offset per shift even with `shifts=1`, so unseeded reruns gave different stems, notes and fret choices (string+fret match swung 3% <-> 54%). `stage_separate` now seeds `random`/`torch`; two reruns give identical notes.
 - CN's end is 2:35 (owner confirmed; vocals return at 2:34.8).
 - Image is 13 GB because basic-pitch pulled full TensorFlow; switching it to its ONNX backend would shrink it.

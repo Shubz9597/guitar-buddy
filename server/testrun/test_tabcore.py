@@ -49,7 +49,71 @@ class LeadFilter(unittest.TestCase):
         kept, counts = tc.lead_filter(notes)
         self.assertEqual([(x["midi"], round(x["end"], 2)) for x in kept],
                          [(78, 2.0), (76, 2.3), (76, 2.55), (74, 2.7), (79, 3.0), (64, 3.9)])
-        self.assertEqual(counts, {"merged": 2, "under_lead": 1, "below_register": 1})
+        self.assertEqual(counts, {"merged": 2, "under_lead": 1, "below_register": 1, "echo_delay": None, "echoes": 0})
+
+    def test_delay_echoes(self):
+        # A phrase through a 380 ms delay: every note comes back at 60% volume (and again at 2x).
+        line = [(0.0, 74), (0.5, 76), (0.9, 78), (1.6, 76), (2.0, 74), (2.7, 71), (3.1, 74), (3.6, 76), (4.3, 78),
+                (4.8, 79), (5.5, 78), (6.0, 76)]
+        played = [note(t, m, dur=0.3, amp=0.8) for t, m in line]
+        echoes = [note(t + k * 0.38, m, dur=0.3, amp=0.8 * 0.6 ** k) for t, m in line for k in (1, 2)]
+        delay = tc.find_echo_delay(played + echoes)
+        self.assertIsNotNone(delay)
+        self.assertAlmostEqual(delay, 0.38, delta=0.015)
+        kept, dropped = tc.echo_filter(played + echoes, delay)
+        self.assertEqual(sorted((round(n["t"], 2), n["midi"]) for n in kept), sorted((t, m) for t, m in line))
+        self.assertEqual(dropped, len(echoes))
+        # Plain playing with no delay: nothing found.
+        self.assertIsNone(tc.find_echo_delay(played))
+
+
+class Bends(unittest.TestCase):
+    HOP = 0.0116
+
+    def track(self, segments, end):
+        """Piecewise pYIN track: [(t_from, pitch_or_callable)], sampled every 11.6 ms."""
+        times, f0 = [], []
+        t = 0.0
+        while t < end:
+            val = None
+            for t0, v in segments:
+                if t >= t0:
+                    val = v(t) if callable(v) else v
+            times.append(t)
+            f0.append(val)
+            t += self.HOP
+        return times, f0
+
+    def test_bend_release_folds_into_one_note(self):
+        # 14b15r14 on the e string: Basic Pitch writes F#5 G5 F#5; pYIN glides 78 -> 79 -> 78.
+        notes = [note(1.0, 78, dur=0.3), note(1.3, 79, dur=0.3), note(1.6, 78, dur=0.3)]
+        times, f0 = self.track([(0.0, 78.0), (1.22, lambda t: 78 + (t - 1.22) / 0.12), (1.34, 79.0),
+                                (1.52, lambda t: 79 - (t - 1.52) / 0.12), (1.64, 78.0)], 2.0)
+        out, merged = tc.merge_bends(notes, times, f0)
+        self.assertEqual(merged, 2)
+        self.assertEqual(len(out), 1)
+        n = out[0]
+        self.assertEqual((n["midi"], n["bend_to"], n["release_to"]), (78, 79, 78))
+        self.assertAlmostEqual(n["end"], 1.9)
+        n.update(string=5, fret=14)
+        self.assertEqual(tc._token(n), "14b15r14")
+
+    def test_hammer_on_stays_two_notes(self):
+        # 14h16: the pitch jumps, no glide through 79.
+        notes = [note(1.0, 78, dur=0.3), note(1.3, 80, dur=0.3)]
+        times, f0 = self.track([(0.0, 78.0), (1.3, 80.0)], 2.0)
+        out, merged = tc.merge_bends(notes, times, f0)
+        self.assertEqual((merged, len(out)), (0, 2))
+
+    def test_offset_and_no_wild_bends(self):
+        # Band tuned 0.2 sharp; a later note 8 semitones up must not turn into "b10".
+        notes = [note(0.2 + 0.4 * i, 64, dur=0.3) for i in range(6)]
+        times, f0 = self.track([(0.0, 64.2)], 3.0)
+        self.assertAlmostEqual(tc.pyin_offset(notes, times, f0), 0.2, places=2)
+        n = note(1.0, 40, dur=0.6)
+        times, f0 = self.track([(0.0, 40.1), (1.3, 48.1)], 2.0)
+        tc.reconcile_with_pyin([[n]], times, f0, [0.9] * len(times), offset=0.1)
+        self.assertIsNone(n["bend_to"])
 
 
 class FretMapping(unittest.TestCase):
@@ -66,6 +130,28 @@ class FretMapping(unittest.TestCase):
             self.assertEqual(self.STD[n["string"]] + n["fret"], n["midi"])
         frets = [n["fret"] for n in notes]
         self.assertLessEqual(max(frets) - min(frets), 5, frets)
+
+    def test_phrase_stays_in_one_box(self):
+        # F#5 can be e14 or B19. In a phrase around frets 10-15 it must be e14, and each pitch keeps one spot.
+        pitches = [74, 78, 74, 69, 78, 74]
+        groups = tc.group_notes([note(0.2 * i, p, dur=0.15) for i, p in enumerate(pitches)])
+        mapped, _ = tc.map_frets(groups, self.STD, kind="lead")
+        notes = [g[0] for g in mapped]
+        self.assertEqual({(n["string"], n["fret"]) for n in notes if n["midi"] == 78}, {(5, 14)})
+        same_pitch_spots = {n["midi"]: set() for n in notes}
+        for n in notes:
+            same_pitch_spots[n["midi"]].add((n["string"], n["fret"]))
+        self.assertTrue(all(len(v) == 1 for v in same_pitch_spots.values()), same_pitch_spots)
+        frets = [n["fret"] for n in notes]
+        self.assertLessEqual(max(frets) - min(frets), 5, frets)
+
+    def test_low_strings_not_high_up_in_a_solo(self):
+        # D4 after B15/e14: D12 (or G7), never A17.
+        groups = tc.group_notes([note(0.0, 74), note(0.3, 78), note(0.6, 64), note(0.9, 62)])
+        mapped, _ = tc.map_frets(groups, self.STD, kind="lead")
+        last = mapped[-1][0]
+        self.assertNotEqual(last["string"], 1)
+        self.assertLessEqual(last["fret"], 12)
 
     def test_below_lowest_string_is_flagged(self):
         groups = tc.group_notes([note(0, 38), note(0.5, 45)])
@@ -90,7 +176,7 @@ class PyinCheck(unittest.TestCase):
 
     def test_agree_and_bend(self):
         groups = [[note(0.1, 74, dur=0.5)]]
-        times, f0, prob = self.track(lambda t: 74.0 if t < 0.3 else 76.0)
+        times, f0, prob = self.track(lambda t: 74.0 if t < 0.3 else min(76.0, 74.0 + (t - 0.3) * 20))  # glide up
         stats = tc.reconcile_with_pyin(groups, times, f0, prob)
         n = groups[0][0]
         self.assertEqual(stats["agree"], 1)
