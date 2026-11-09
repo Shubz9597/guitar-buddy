@@ -23,11 +23,26 @@ class Basics(unittest.TestCase):
             tc.parse_tuning("E4 B3 G3 D3 A2 E2")
 
     def test_pick_transcriber(self):
+        self.assertEqual(tc.pick_transcriber("lead", muscriptor_ok=True), "muscriptor")
         self.assertEqual(tc.pick_transcriber("riff"), "yourmt3")
         self.assertEqual(tc.pick_transcriber("lead"), "basicpitch")
         self.assertEqual(tc.pick_transcriber("riff", "basicpitch"), "basicpitch")
         with self.assertRaises(ValueError):
             tc.pick_transcriber("lead", "mt3")
+
+    def test_muscriptor_events_and_lead_class(self):
+        ev = [{"type": "start", "index": 0, "pitch": 55, "start_time": 1.0, "instrument": "acoustic_guitar"},
+              {"type": "start", "index": 1, "pitch": 76, "start_time": 1.0, "instrument": "distorted_electric_guitar"},
+              {"type": "end", "start_event_index": 0, "end_time": 1.5},
+              {"type": "start", "index": 2, "pitch": 36, "start_time": 1.2, "instrument": "drums"}]
+        notes = tc.muscriptor_events_to_notes(ev)
+        self.assertEqual([(n["midi"], n["end"]) for n in notes], [(55, 1.5), (76, 1.25), (36, 1.45)])
+        rhythm = [dict(n, midi=55 + i % 5, t=i * 0.1) for i, n in enumerate([notes[0]] * 30)]
+        lead = [dict(notes[1], midi=74 + i % 5, t=i * 0.2) for i in range(12)]
+        got, _ = tc.pick_guitar_notes(rhythm + lead + [notes[2]], "lead")
+        self.assertEqual({n["instrument"] for n in got}, {"distorted_electric_guitar"})
+        got, _ = tc.pick_guitar_notes(rhythm + lead + [notes[2]], "riff")
+        self.assertEqual(len(got), 42)  # every guitar note, no drums
 
     def test_tuning_letters(self):
         dadfae = [38, 45, 50, 53, 57, 64]  # D2 A2 D3 F3 A3 E4

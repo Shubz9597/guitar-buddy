@@ -1,0 +1,12 @@
+# MuScriptor (Kyutai/Mirelo, 2026) transcription image. Separate from the main image because it needs numpy 2
+# while basic-pitch needs numpy < 2. The first lines match Dockerfile so Docker reuses the cached torch layer.
+# Weights are gated (CC BY-NC 4.0): docker-run.sh passes the owner's token from /srv/guitar-buddy/models/hf_token.
+FROM python:3.11-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PIP_NO_CACHE_DIR=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    TORCH_HOME=/opt/torch NUMBA_CACHE_DIR=/tmp/numba HOME=/tmp
+RUN pip install --index-url https://download.pytorch.org/whl/cu126 torch==2.8.0 torchaudio==2.8.0
+RUN pip install muscriptor==0.4.0
+ENV USER=gb LOGNAME=gb TORCHINDUCTOR_CACHE_DIR=/tmp/inductor
+WORKDIR /app

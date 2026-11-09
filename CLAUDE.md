@@ -155,7 +155,23 @@ programs 24-31, Basic Pitch for leads. Measured: GC 56/41/62 -> **61/64/72** (in
 lead as violin/viola/cello (guitar-only 16% found; all instruments from the stem 74% found but 37-41% real), and no BP+YourMT3+ union/vote beat
 BP on both songs, so leads stay on Basic Pitch. Speed on CPU: ~40 s for a 43 s clip (whole GC run 78 s with stems cached). It outputs no
 loudness (velocity always 1), so notes get amp 0.8 and the "quiet" flag never fires; riffs now show few "?" (unsure marks are weaker there).
-Next candidate: MuScriptor (Kyutai/Mirelo 2026, CC BY-NC weights, gated: needs the owner's HF token in `/srv/guitar-buddy/models/hf_token`).
+
+**MuScriptor is now the default transcriber (2026-11-10).** Kyutai/Mirelo 2026 (pip `muscriptor==0.4.0`, weights gated CC BY-NC 4.0 =
+non-commercial; owner's read token in `/srv/guitar-buddy/models/hf_token`, never commit/print it; weights cached in
+`/srv/guitar-buddy/models/hf-cache`). Own image `guitar-buddy-muscriptor` (`Dockerfile.muscriptor`; needs numpy 2, basic-pitch needs numpy 1).
+`docker-run.sh`: `run.py --prepare` (clip + stems) -> job file -> MuScriptor container (`--instruments` = the 3 guitar classes, on the
+song's guitar stem/channel) -> `run.py` builds the tab. Without token+image it falls back to YourMT3+/Basic Pitch.
+Leads keep the guitar class with the highest median pitch (`tabcore.pick_guitar_notes`; CN: lead = one class, rhythm = another), riffs keep all.
+Medium on CPU: ~3.3 s per s of audio on the full stem, ~1.2 s/s on one channel; CN 2.8 min, GC 1.6 min, Shesmovedon (69 s) 5.3 min with stems cached.
+Then the fret-mapper weights were swept (`tabcore.COST`, judged by the weaker song): no low-fret preference, no same-string pull, open strings cost 1.0 in riffs.
+
+| Song | found / real / string+fret | was (Basic Pitch / YourMT3+) |
+|---|---|---|
+| Comfortably Numb | 64% / **80%** / **84%** | 60 / 69 / 77 |
+| Grand Conjuration | **94%** / 68% / 77% | 61 / 64 / 72 |
+
+Left to reach the goal: CN recall (the fast run D14/12-11-9-7 and the low D-string phrase are not in MuScriptor's output in any class),
+GC precision (68%), GC string+fret (77%).
 
 ## Other open work
 

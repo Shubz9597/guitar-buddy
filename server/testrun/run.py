@@ -12,6 +12,8 @@ Outputs go to <work-dir>/<song>/ (default /srv/guitar-buddy/work):
     02_stems/*.wav       Demucs htdemucs_6s stems (guitar.wav = the useful one) (cached)
     03_basicpitch.json   raw Basic Pitch notes (leads)                      (cached)
     03_yourmt3.json      YourMT3+ guitar notes from the mix (riffs; 03_yourmt3_all.json = every instrument)
+    03_muscriptor.json   MuScriptor guitar notes (03_muscriptor_raw.json = its events; made by docker-run.sh,
+                         which runs MuScriptor in its own image between `run.py --prepare` and `run.py`)
     04_pyin.csv          pYIN pitch track of the guitar stem               (cached)
     05_beats.json        tempo + beat times from the drums stem            (cached)
     06_notes.csv         final notes: time, pitch, string, fret, flags     (rebuilt every run)
@@ -238,6 +240,31 @@ def stage_yourmt3(mix: Path, clip_start: float, out: Path):
     out.write_text(json.dumps(guitar, indent=0))
 
 
+def muscriptor_job(out: Path, source: Path, model: str):
+    """Ask docker-run.sh to run MuScriptor (own image) on `source` unless its cached output matches.
+    Returns True when a job was written."""
+    raw, params_file = out / "03_muscriptor_raw.json", out / "03_muscriptor_raw.params.json"
+    params = {"input": str(source), "size": source.stat().st_size, "mtime": int(source.stat().st_mtime), "model": model,
+              "instruments": ",".join(sorted(tc.GUITAR_CLASSES))}
+    job = WORK_DIR / ".muscriptor_job.json"
+    if raw.exists() and params_file.exists() and json.loads(params_file.read_text()) == params:
+        job.unlink(missing_ok=True)
+        return False
+    job.write_text(json.dumps({"input": str(source), "output": str(raw), "params_file": str(params_file),
+                               "params": params, "model": model, "instruments": params["instruments"]}))
+    log(f"muscriptor: job written for docker-run.sh ({source.name}, model {model})")
+    return True
+
+
+def stage_muscriptor(out: Path, clip_start: float, kind: str, notes_json: Path):
+    events = json.loads((out / "03_muscriptor_raw.json").read_text())
+    notes = [dict(n, t=round(n["t"] + clip_start, 4), end=round(n["end"] + clip_start, 4))
+             for n in tc.muscriptor_events_to_notes(events)]
+    chosen, how = tc.pick_guitar_notes(notes, kind)
+    notes_json.write_text(json.dumps(chosen, indent=0))
+    return {"kept": how}
+
+
 def lead_pitch_range(basicpitch_json: Path, seg_start: float, seg_end: float):
     """MIDI range for pYIN in lead mode: the lead line's 5th-95th percentile, 3 semitones below
     (slides) and 4 above (bends). None if there are too few notes to tell."""
@@ -378,7 +405,9 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
         "",
         "## Notes",
         "",
-        f"- Transcriber: {transcriber}; notes in segment: {n_raw}",
+        f"- Transcriber: {transcriber}"
+        + (f" ({STAGE_INFO['pitch'].get('kept')})" if STAGE_INFO.get("pitch", {}).get("kept") else "")
+        + f"; notes in segment: {n_raw}",
         (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes, dropped {lf_counts['under_lead']} under "
          f"the lead and {lf_counts['below_register']} quiet low notes" if lf_counts is not None
          else "- Lead filter: off"),
@@ -464,8 +493,12 @@ def main():
     ap.add_argument("--shifts", type=int, default=1, help="Demucs shifts (more = slower, slightly better)")
     ap.add_argument("--reference", type=Path, help="ASCII tab of the segment to score against")
     ap.add_argument("--no-lead-filter", action="store_true", help="lead mode: keep every Basic Pitch note")
-    ap.add_argument("--transcriber", choices=["auto", "basicpitch", "yourmt3"],
-                    help="note transcriber (default auto: YourMT3+ for riffs, Basic Pitch for leads)")
+    ap.add_argument("--transcriber", choices=["auto", "basicpitch", "yourmt3", "muscriptor"],
+                    help="note transcriber (default auto: MuScriptor when set up, else YourMT3+ for riffs and "
+                         "Basic Pitch for leads)")
+    ap.add_argument("--muscriptor-model", default="medium", choices=["small", "medium", "large"])
+    ap.add_argument("--prepare", action="store_true",
+                    help="internal (docker-run.sh): clip + separate, write a MuScriptor job if needed, stop")
     ap.add_argument("--channel", choices=["both", "left", "right"],
                     help="transcribe both sides of the guitar stem (default) or one side (two guitars panned apart)")
     ap.add_argument("--force-from", choices=CACHED_STAGES)
@@ -482,7 +515,8 @@ def main():
     cfg.setdefault("kind", "lead")
     cfg.setdefault("tuning", "standard")
     cfg.setdefault("channel", "both")
-    transcriber = tc.pick_transcriber(cfg["kind"], cfg.get("transcriber", "auto"))
+    transcriber = tc.pick_transcriber(cfg["kind"], cfg.get("transcriber", "auto"),
+                                      muscriptor_ok=os.environ.get("GB_MUSCRIPTOR") == "1")
     name = a.name or a.song
     missing = [k for k in ("file", "start", "end") if not cfg.get(k)]
     if missing or not name:
@@ -520,6 +554,16 @@ def main():
         st.finish(stage_separate(mix, stems, a.device, a.segment, a.shifts))
     source = channel_wav(guitar, cfg["channel"])
     pitch_params = {"v": 1} if cfg["channel"] == "both" else {"v": 1, "channel": cfg["channel"]}
+    if a.prepare:
+        if transcriber == "muscriptor":
+            muscriptor_job(out, source, a.muscriptor_model)
+        return
+    if transcriber == "muscriptor":
+        if not (out / "03_muscriptor_raw.json").exists():
+            sys.exit("MuScriptor output missing: run through server/testrun/docker-run.sh (it runs MuScriptor in its own "
+                     "image), or pass --transcriber basicpitch")
+        pitch_params = {"transcriber": "muscriptor", "v": 1,
+                        "raw": json.loads((out / "03_muscriptor_raw.params.json").read_text())}
     if transcriber == "yourmt3":
         import ymt3_notes
 
@@ -531,9 +575,12 @@ def main():
     if st.need("pitch", pitch_params, [notes_json]):
         if transcriber == "yourmt3":
             stage_yourmt3(mix, clip_start, notes_json)
+            st.finish()
+        elif transcriber == "muscriptor":
+            st.finish(stage_muscriptor(out, clip_start, cfg["kind"], notes_json))
         else:
             stage_pitch(source, clip_start, notes_json)
-        st.finish()
+            st.finish()
     midi_range = None
     if cfg["kind"] == "lead" and not a.no_lead_filter:
         midi_range = lead_pitch_range(notes_json, seg_start, seg_end)
@@ -545,6 +592,7 @@ def main():
         st.finish()
 
     STAGE_INFO["separate"] = st.info("separate")
+    STAGE_INFO["pitch"] = st.info("pitch")
     STAGE_TIMES.update(st.timings)
     tab = build_tab(out, seg_start, seg_end, cfg["kind"], tuning, clip_start, stems, mix, a.reference,
                     use_lead_filter=not a.no_lead_filter, channel=cfg["channel"], transcriber=transcriber)

@@ -20,17 +20,58 @@ import re
 import statistics
 
 # Which note transcriber feeds the tab, and the cached notes file it writes in <work>/<song>/.
-# auto: YourMT3+ for riffs (much better on distorted rhythm guitar), Basic Pitch for leads (YourMT3+ labels
-# sustained lead guitar as strings). See ymt3_notes.py.
-NOTES_FILES = {"basicpitch": "03_basicpitch.json", "yourmt3": "03_yourmt3.json"}
+# auto: MuScriptor when it is set up (best on both test songs, 2026-11-10); otherwise YourMT3+ for riffs and
+# Basic Pitch for leads (YourMT3+ labels sustained lead guitar as strings). See ymt3_notes.py / run.py.
+NOTES_FILES = {"basicpitch": "03_basicpitch.json", "yourmt3": "03_yourmt3.json", "muscriptor": "03_muscriptor.json"}
+GUITAR_CLASSES = {"acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"}
 
 
-def pick_transcriber(kind: str, choice: str = "auto") -> str:
+def pick_transcriber(kind: str, choice: str = "auto", muscriptor_ok: bool = False) -> str:
     if choice == "auto":
+        if muscriptor_ok:
+            return "muscriptor"
         return "yourmt3" if kind == "riff" else "basicpitch"
     if choice not in NOTES_FILES:
         raise ValueError(f"unknown transcriber {choice!r}")
     return choice
+
+
+def pick_guitar_notes(notes: list[dict], kind: str) -> tuple[list[dict], str]:
+    """MuScriptor labels each note with an instrument class. Riffs: every guitar class. Leads: the guitar class
+    that sits highest (median pitch) among classes with a real share of the notes; MuScriptor tends to put the
+    rhythm parts and the lead in different classes (Comfortably Numb: rhythm 'acoustic' median G3, lead
+    'distorted' median E4). Returns (notes, description)."""
+    gtr = [n for n in notes if n.get("instrument") in GUITAR_CLASSES]
+    if kind != "lead" or not gtr:
+        return gtr, "all guitar classes"
+    by: dict[str, list[dict]] = {}
+    for n in gtr:
+        by.setdefault(n["instrument"], []).append(n)
+    big = {k: v for k, v in by.items() if len(v) >= max(10, 0.05 * len(gtr))} or by
+    lead = max(big, key=lambda k: statistics.median(n["midi"] for n in big[k]))
+    return by[lead], f"lead class {lead} ({len(by[lead])} of {len(gtr)} guitar notes)"
+
+
+def muscriptor_events_to_notes(events: list[dict]) -> list[dict]:
+    """MuScriptor --format json events (start: index/pitch/start_time/instrument; end: start_event_index/end_time)
+    -> notes with t, end, midi, amp, instrument. It predicts no loudness, so amp is a neutral 0.8."""
+    starts, notes = {}, []
+    for e in events:
+        if e["type"] == "start":
+            starts[e["index"]] = e
+    ended = set()
+    for e in events:
+        if e["type"] == "end" and e.get("start_event_index") in starts:
+            s = starts[e["start_event_index"]]
+            ended.add(e["start_event_index"])
+            notes.append({"t": s["start_time"], "end": max(e["end_time"], s["start_time"] + 0.02), "midi": s["pitch"],
+                          "amp": 0.8, "instrument": s.get("instrument", "")})
+    for i, s in starts.items():
+        if i not in ended:
+            notes.append({"t": s["start_time"], "end": s["start_time"] + 0.25, "midi": s["pitch"], "amp": 0.8,
+                          "instrument": s.get("instrument", "")})
+    notes.sort(key=lambda n: (n["t"], n["midi"]))
+    return notes
 
 
 UNCERTAIN = {"pyin-unvoiced", "pitch-disagree", "octave?", "quiet", "grid-collision"}
@@ -440,18 +481,35 @@ def hand_positions(state, max_fret):
     return [p for p in range(max(1, hi - 4), lo + 2) if p <= max_fret - 3]
 
 
+# Fret-mapper weights. Swept on the reference tabs with evaluate.py (2026-11-10, 2916 combinations), judged by the
+# weaker of the two songs so nothing is tuned to one song: same string+fret CN 62% -> 84%, GC 65% -> 77%.
+# What the sweep says, consistently across the top results: no preference for low frets, no pull towards one
+# string (players move across strings inside a box), open strings cost something in riffs too, hand moves cheap
+# per fret but not free. Re-sweep when a new reference tab is added.
+COST = {
+    "low_pos": 0.0,         # per fret of hand position (was 0.02: dragged phrases down the neck)
+    "span": 0.15,           # per fret of chord span
+    "open_lead": 2.0,       # open string in a lead
+    "open_riff": 1.0,       # open string in a riff (was 0: GC drone came out at B3 instead of G7)
+    "stretch": 0.4,         # note outside the 4-fret box
+    "shift_fixed": 0.5,     # any hand move
+    "shift_per_fret": 0.2,  # per fret moved (divided by 1 + 2 * gap seconds)
+    "string_change": 0.0,   # per string the lowest note moves (was 0.1)
+    "same_string": 0.0,     # lead: bonus for staying on one string (was 0.1: CN slid down the e string)
+}
+
+
 def _state_cost(state, pos, kind):
-    cost = 0.02 * pos  # tie-break: of two equal shapes, the lower one on the neck
+    cost = COST["low_pos"] * pos  # tie-break: of two equal shapes, the lower one on the neck
     fretted = [f for _, f in state if f > 0]
     if fretted:
-        cost += 0.15 * (max(fretted) - min(fretted))
+        cost += COST["span"] * (max(fretted) - min(fretted))
     for s, f in state:
         if f == 0:
-            if kind == "lead":
-                cost += 2.0  # leads are mostly fretted; riffs use open strings freely
+            cost += COST["open_lead"] if kind == "lead" else COST["open_riff"]  # leads are mostly fretted
             continue
         if f < pos or f > pos + 3:
-            cost += 0.4  # stretch
+            cost += COST["stretch"]
         if f > 17:
             cost += 0.1 * (f - 17)
         if kind == "lead" and s <= 2 and f > 12:
@@ -467,12 +525,12 @@ def _move_cost(a, pa, b, pb, gap, kind):
     shift = abs(pa - pb)
     if shift:
         ease = 1.0 + 2.0 * max(gap, 0.0)  # more time between notes = shifts are easier
-        cost += 0.5 + 0.4 * shift / ease
+        cost += COST["shift_fixed"] + COST["shift_per_fret"] * shift / ease
         if shift > 4 and gap < 0.25:
             cost += 1.0  # big jump with no time to make it
-    cost += 0.1 * abs(a[0][0] - b[0][0])
+    cost += COST["string_change"] * abs(a[0][0] - b[0][0])
     if kind == "lead" and len(a) == 1 and len(b) == 1 and a[0][0] == b[0][0]:
-        cost -= 0.1  # small pull towards staying on a string for runs
+        cost -= COST["same_string"]  # small pull towards staying on a string for runs
     return cost
 
 
