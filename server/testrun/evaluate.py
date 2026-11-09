@@ -5,7 +5,7 @@
     python3 server/testrun/evaluate.py --misses   # also list missed / extra notes per song
 
 It reruns only the note-to-tab step (tabcore.transcribe) from the cached stage outputs in
-<work>/<song>/ (03_basicpitch.json, 04_pyin.csv), so run.py must have run for the song first.
+<work>/<song>/ (03_basicpitch.json or 03_yourmt3.json, 04_pyin.csv), so run.py must have run for the song first.
 Reference tabs live in <work>/<song>/reference.txt (copyrighted: never commit them).
 
 The goal: a draft tab close to the owner's screenshot. Every fix must move these numbers on all songs,
@@ -45,11 +45,12 @@ def load_pyin(path: Path):
 def evaluate(song: str, cfg: dict, work: Path):
     out = work / song
     ref_path = out / "reference.txt"
-    if not ref_path.exists() or not (out / "03_basicpitch.json").exists():
+    notes_json = out / tc.NOTES_FILES[tc.pick_transcriber(cfg.get("kind", "lead"), cfg.get("transcriber", "auto"))]
+    if not ref_path.exists() or not notes_json.exists():
         return None
     seg_start, seg_end = tc.parse_time(cfg["start"]), tc.parse_time(cfg["end"])
     tuning = tc.parse_tuning(cfg.get("tuning", "standard"))
-    raw = [n for n in json.loads((out / "03_basicpitch.json").read_text()) if seg_start <= n["t"] < seg_end]
+    raw = [n for n in json.loads(notes_json.read_text()) if seg_start <= n["t"] < seg_end]
     f0_times, f0_midi, prob = load_pyin(out / "04_pyin.csv")
     mapped, _, _ = tc.transcribe(raw, f0_times, f0_midi, prob, tuning, kind=cfg.get("kind", "lead"))
     ours = tc.playing_order(mapped)

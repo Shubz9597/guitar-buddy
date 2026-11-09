@@ -10,7 +10,8 @@ Outputs go to <work-dir>/<song>/ (default /srv/guitar-buddy/work):
 
     01_mix.wav           the segment plus padding, 44.1 kHz stereo        (cached)
     02_stems/*.wav       Demucs htdemucs_6s stems (guitar.wav = the useful one) (cached)
-    03_basicpitch.json   raw Basic Pitch notes                             (cached)
+    03_basicpitch.json   raw Basic Pitch notes (leads)                      (cached)
+    03_yourmt3.json      YourMT3+ guitar notes from the mix (riffs; 03_yourmt3_all.json = every instrument)
     04_pyin.csv          pYIN pitch track of the guitar stem               (cached)
     05_beats.json        tempo + beat times from the drums stem            (cached)
     06_notes.csv         final notes: time, pitch, string, fret, flags     (rebuilt every run)
@@ -225,6 +226,18 @@ def stage_pyin(guitar: Path, clip_start: float, seg_start: float, seg_end: float
             w.writerow([f"{t:.4f}", f"{f:.2f}" if ok else "", f"{librosa.hz_to_midi(f):.3f}" if ok else "", f"{p:.3f}"])
 
 
+def stage_yourmt3(mix: Path, clip_start: float, out: Path):
+    """YourMT3+ on the full mix (it hears guitar better in context than in the Demucs stem, where it mislabels
+    much of it as strings/synth); keep the notes it labels as guitar."""
+    import ymt3_notes
+
+    rows = [dict(r, t=round(r["t"] + clip_start, 4), end=round(r["end"] + clip_start, 4))
+            for r in ymt3_notes.transcribe(mix)]
+    out.with_name("03_yourmt3_all.json").write_text(json.dumps(rows, indent=0))
+    guitar = [r for r in rows if not r["drum"] and r["program"] in ymt3_notes.GUITAR_PROGRAMS]
+    out.write_text(json.dumps(guitar, indent=0))
+
+
 def lead_pitch_range(basicpitch_json: Path, seg_start: float, seg_end: float):
     """MIDI range for pYIN in lead mode: the lead line's 5th-95th percentile, 3 semitones below
     (slides) and 4 above (bends). None if there are too few notes to tell."""
@@ -296,8 +309,8 @@ def spans(times_flags, win):
 
 
 def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Path, mix: Path, reference: Path | None,
-              use_lead_filter: bool = True, channel: str = "both"):
-    raw = json.loads((out / "03_basicpitch.json").read_text())
+              use_lead_filter: bool = True, channel: str = "both", transcriber: str = "basicpitch"):
+    raw = json.loads((out / tc.NOTES_FILES[transcriber]).read_text())
     f0_times, f0_midi, prob = load_pyin(out / "04_pyin.csv")
     seg_notes = [n for n in raw if seg_start <= n["t"] < seg_end]
     mapped, dropped, info = tc.transcribe(seg_notes, f0_times, f0_midi, prob, tuning, kind=kind,
@@ -365,7 +378,7 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
         "",
         "## Notes",
         "",
-        f"- Basic Pitch notes in segment: {n_raw}",
+        f"- Transcriber: {transcriber}; notes in segment: {n_raw}",
         (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes, dropped {lf_counts['under_lead']} under "
          f"the lead and {lf_counts['below_register']} quiet low notes" if lf_counts is not None
          else "- Lead filter: off"),
@@ -451,6 +464,8 @@ def main():
     ap.add_argument("--shifts", type=int, default=1, help="Demucs shifts (more = slower, slightly better)")
     ap.add_argument("--reference", type=Path, help="ASCII tab of the segment to score against")
     ap.add_argument("--no-lead-filter", action="store_true", help="lead mode: keep every Basic Pitch note")
+    ap.add_argument("--transcriber", choices=["auto", "basicpitch", "yourmt3"],
+                    help="note transcriber (default auto: YourMT3+ for riffs, Basic Pitch for leads)")
     ap.add_argument("--channel", choices=["both", "left", "right"],
                     help="transcribe both sides of the guitar stem (default) or one side (two guitars panned apart)")
     ap.add_argument("--force-from", choices=CACHED_STAGES)
@@ -461,12 +476,13 @@ def main():
     cfg = dict(songs.get(a.song, {})) if a.song else {}
     if a.song and a.song not in songs:
         ap.error(f"unknown song {a.song!r}")
-    for key in ("file", "start", "end", "kind", "tuning", "channel"):
+    for key in ("file", "start", "end", "kind", "tuning", "channel", "transcriber"):
         if getattr(a, key):
             cfg[key] = getattr(a, key)
     cfg.setdefault("kind", "lead")
     cfg.setdefault("tuning", "standard")
     cfg.setdefault("channel", "both")
+    transcriber = tc.pick_transcriber(cfg["kind"], cfg.get("transcriber", "auto"))
     name = a.name or a.song
     missing = [k for k in ("file", "start", "end") if not cfg.get(k)]
     if missing or not name:
@@ -504,12 +520,23 @@ def main():
         st.finish(stage_separate(mix, stems, a.device, a.segment, a.shifts))
     source = channel_wav(guitar, cfg["channel"])
     pitch_params = {"v": 1} if cfg["channel"] == "both" else {"v": 1, "channel": cfg["channel"]}
-    if st.need("pitch", pitch_params, [out / "03_basicpitch.json"]):
-        stage_pitch(source, clip_start, out / "03_basicpitch.json")
+    if transcriber == "yourmt3":
+        import ymt3_notes
+
+        if not ymt3_notes.available():
+            sys.exit(f"YourMT3+ not found in {ymt3_notes.YMT3_DIR}: run server/testrun/get-yourmt3.sh "
+                     "(or pass --transcriber basicpitch)")
+        pitch_params = {"transcriber": "yourmt3", "exp": ymt3_notes.EXP, "v": 2}
+    notes_json = out / tc.NOTES_FILES[transcriber]
+    if st.need("pitch", pitch_params, [notes_json]):
+        if transcriber == "yourmt3":
+            stage_yourmt3(mix, clip_start, notes_json)
+        else:
+            stage_pitch(source, clip_start, notes_json)
         st.finish()
     midi_range = None
     if cfg["kind"] == "lead" and not a.no_lead_filter:
-        midi_range = lead_pitch_range(out / "03_basicpitch.json", seg_start, seg_end)
+        midi_range = lead_pitch_range(notes_json, seg_start, seg_end)
     if st.need("pyin", {"seg": [seg_start, seg_end], "midi_range": midi_range}, [out / "04_pyin.csv"]):
         stage_pyin(source, clip_start, seg_start, seg_end, out / "04_pyin.csv", midi_range)
         st.finish()
@@ -520,7 +547,7 @@ def main():
     STAGE_INFO["separate"] = st.info("separate")
     STAGE_TIMES.update(st.timings)
     tab = build_tab(out, seg_start, seg_end, cfg["kind"], tuning, clip_start, stems, mix, a.reference,
-                    use_lead_filter=not a.no_lead_filter, channel=cfg["channel"])
+                    use_lead_filter=not a.no_lead_filter, channel=cfg["channel"], transcriber=transcriber)
     print("\n" + tab)
     log(f"report: {out / '07_report.md'}")
     log(f"guitar stem: {guitar}")

@@ -11,3 +11,11 @@ basic-pitch==0.4.0
 librosa>=0.10
 soundfile>=0.12
 pretty_midi>=0.2.10
+# YourMT3+ (riff transcriber; its code + checkpoint come from testrun/get-yourmt3.sh, not pip)
+lightning>=2.2.1
+transformers==4.45.1
+einops
+deprecated
+mido
+mir_eval
+wandb

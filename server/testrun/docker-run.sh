@@ -12,6 +12,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE=guitar-buddy-testrun
 MUSIC="${GB_MUSIC_DIR:-/mnt/workspace/music-server/downloads/complete}"
 WORK="${GB_WORK_DIR:-/srv/guitar-buddy/work}"
+MODELS="${GB_MODELS_DIR:-/srv/guitar-buddy/models}"  # YourMT3+ code + checkpoint (get-yourmt3.sh)
 
 if [[ "${1:-}" == "--build" ]]; then
   exec docker build -t "$IMAGE" -f "$HERE/Dockerfile" "$HERE/.."
@@ -22,7 +23,7 @@ if [[ "${1:-}" == "--sections" ]]; then script=/app/sections.py; shift; fi  # fi
 
 gpu=()
 if command -v nvidia-ctk >/dev/null && nvidia-smi >/dev/null 2>&1; then gpu=(--gpus all); fi
-mkdir -p "$WORK"
+mkdir -p "$WORK" "$MODELS"
 exec docker run --rm --init \
   --user "$(id -u):$(id -g)" \
   --security-opt label=disable \
@@ -30,5 +31,6 @@ exec docker run --rm --init \
   -v "$MUSIC:$MUSIC:ro" \
   -v "$WORK:$WORK" \
   -v "$HERE:/app:ro" \
-  -e GB_MUSIC_DIR="$MUSIC" -e GB_WORK_DIR="$WORK" \
+  -v "$MODELS:$MODELS:ro" \
+  -e GB_MUSIC_DIR="$MUSIC" -e GB_WORK_DIR="$WORK" -e GB_YMT3_DIR="$MODELS/yourmt3" \
   "$IMAGE" python "$script" "$@"

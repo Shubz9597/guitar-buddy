@@ -19,6 +19,20 @@ import itertools
 import re
 import statistics
 
+# Which note transcriber feeds the tab, and the cached notes file it writes in <work>/<song>/.
+# auto: YourMT3+ for riffs (much better on distorted rhythm guitar), Basic Pitch for leads (YourMT3+ labels
+# sustained lead guitar as strings). See ymt3_notes.py.
+NOTES_FILES = {"basicpitch": "03_basicpitch.json", "yourmt3": "03_yourmt3.json"}
+
+
+def pick_transcriber(kind: str, choice: str = "auto") -> str:
+    if choice == "auto":
+        return "yourmt3" if kind == "riff" else "basicpitch"
+    if choice not in NOTES_FILES:
+        raise ValueError(f"unknown transcriber {choice!r}")
+    return choice
+
+
 UNCERTAIN = {"pyin-unvoiced", "pitch-disagree", "octave?", "quiet", "grid-collision"}
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]

@@ -146,7 +146,16 @@ Baseline: Comfortably Numb 60% / 69% / 77%; Grand Conjuration 56% / 41% / 62% (p
 Tried and rejected (all in the container, scored on both songs from Basic Pitch's saved raw output, `03_model_output_<channel>.npz`):
 - Basic Pitch thresholds (onset 0.2-0.5, frame 0.15-0.3, min length 50/80 ms, melodia on/off): the current 0.5 / 0.3 / 80 ms / on is best overall; lower thresholds buy GC recall with a precision collapse.
 - Why the GC intro is missed: the model's onset map has the D4+A4 double-stops in the right rhythm, but they are staccato, so the frame ("sustain") activation stays under 0.3 and the notes are dropped; distortion also makes a phantom difference tone an octave below the dyad (D3), which survives. Adding onset peaks back (all, or gap-only top-k with phantom removal) raises GC recall to 62-90% but precision falls to 7-34%, and on leads it breaks CN.
-- Conclusion: Basic Pitch is the ceiling for distorted riffs. Next candidate: a stronger free transcription model (e.g. YourMT3+), compared with the same evaluate.py.
+- Conclusion: Basic Pitch is the ceiling for distorted riffs.
+
+**YourMT3+ for riffs (2026-11-10).** Free model (public HF Space mimbres/YourMT3, checkpoint YPTF.MoE+Multi noPS, ~560 MB);
+`server/testrun/get-yourmt3.sh` downloads code + checkpoint to `/srv/guitar-buddy/models/yourmt3` (not in the repo), the image carries its
+pip deps, `ymt3_notes.py` wraps it. `--transcriber auto` (default) = YourMT3+ for `kind: riff` on the **full mix** keeping General-MIDI guitar
+programs 24-31, Basic Pitch for leads. Measured: GC 56/41/62 -> **61/64/72** (intro double-stops 10% -> 35% found). On CN it labels Gilmour's
+lead as violin/viola/cello (guitar-only 16% found; all instruments from the stem 74% found but 37-41% real), and no BP+YourMT3+ union/vote beat
+BP on both songs, so leads stay on Basic Pitch. Speed on CPU: ~40 s for a 43 s clip (whole GC run 78 s with stems cached). It outputs no
+loudness (velocity always 1), so notes get amp 0.8 and the "quiet" flag never fires; riffs now show few "?" (unsure marks are weaker there).
+Next candidate: MuScriptor (Kyutai/Mirelo 2026, CC BY-NC weights, gated: needs the owner's HF token in `/srv/guitar-buddy/models/hf_token`).
 
 ## Other open work
 

@@ -22,6 +22,13 @@ class Basics(unittest.TestCase):
         with self.assertRaises(ValueError):
             tc.parse_tuning("E4 B3 G3 D3 A2 E2")
 
+    def test_pick_transcriber(self):
+        self.assertEqual(tc.pick_transcriber("riff"), "yourmt3")
+        self.assertEqual(tc.pick_transcriber("lead"), "basicpitch")
+        self.assertEqual(tc.pick_transcriber("riff", "basicpitch"), "basicpitch")
+        with self.assertRaises(ValueError):
+            tc.pick_transcriber("lead", "mt3")
+
     def test_tuning_letters(self):
         dadfae = [38, 45, 50, 53, 57, 64]  # D2 A2 D3 F3 A3 E4
         self.assertEqual(tc.parse_tuning("DADFAE"), dadfae)
