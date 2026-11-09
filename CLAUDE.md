@@ -137,6 +137,17 @@ Which stage fails:
 - CN's end is 2:35 (owner confirmed; vocals return at 2:34.8).
 - Image is 13 GB because basic-pitch pulled full TensorFlow; switching it to its ONNX backend would shrink it.
 
+#### Goal (owner, 2026-11-10): tabs close to the owner's screenshots
+
+`python3 server/testrun/evaluate.py [--misses]` re-scores every song with a `work/<song>/reference.txt` in ~1 s (host, stdlib) against
+**80% of the tab's notes found, 70% of our notes real, 80% same string+fret**. A fix counts only if it helps across songs (no per-song tuning).
+Baseline: Comfortably Numb 60% / 69% / 77%; Grand Conjuration 56% / 41% / 62% (power chords 80% found, intro double-stops ~10%).
+
+Tried and rejected (all in the container, scored on both songs from Basic Pitch's saved raw output, `03_model_output_<channel>.npz`):
+- Basic Pitch thresholds (onset 0.2-0.5, frame 0.15-0.3, min length 50/80 ms, melodia on/off): the current 0.5 / 0.3 / 80 ms / on is best overall; lower thresholds buy GC recall with a precision collapse.
+- Why the GC intro is missed: the model's onset map has the D4+A4 double-stops in the right rhythm, but they are staccato, so the frame ("sustain") activation stays under 0.3 and the notes are dropped; distortion also makes a phantom difference tone an octave below the dyad (D3), which survives. Adding onset peaks back (all, or gap-only top-k with phantom removal) raises GC recall to 62-90% but precision falls to 7-34%, and on leads it breaks CN.
+- Conclusion: Basic Pitch is the ceiling for distorted riffs. Next candidate: a stronger free transcription model (e.g. YourMT3+), compared with the same evaluate.py.
+
 ## Other open work
 
 - **Later (owner, 2026-11-09):** use the vocals and the rhythm/chord progression too, not just the lead: e.g. vocal timing for sections, chords under the solo (would also help tell lead from rhythm notes and pick the key).
