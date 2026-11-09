@@ -22,6 +22,17 @@ class Basics(unittest.TestCase):
         with self.assertRaises(ValueError):
             tc.parse_tuning("E4 B3 G3 D3 A2 E2")
 
+    def test_tuning_letters(self):
+        dadfae = [38, 45, 50, 53, 57, 64]  # D2 A2 D3 F3 A3 E4
+        self.assertEqual(tc.parse_tuning("DADFAE"), dadfae)
+        self.assertEqual(tc.parse_tuning("dadfae"), dadfae)
+        self.assertEqual(tc.parse_tuning("D A D F A E"), dadfae)
+        self.assertEqual(tc.parse_tuning("DADGAD"), [38, 45, 50, 55, 57, 62])
+        self.assertEqual(tc.parse_tuning("EADGBE"), tc.parse_tuning("standard"))
+        self.assertEqual(tc.parse_tuning("Eb Ab Db Gb Bb Eb"), tc.parse_tuning("eb-standard"))
+        self.assertEqual(tc.parse_tuning("EbAbDbGbBbEb"), tc.parse_tuning("eb-standard"))  # 'b' after a letter = flat
+        self.assertEqual(tc.parse_tuning("CGCFAD"), tc.parse_tuning("drop-c"))
+
     def test_time(self):
         self.assertEqual(tc.parse_time("2:05"), 125.0)
         self.assertEqual(tc.parse_time("1:02:03.5"), 3723.5)

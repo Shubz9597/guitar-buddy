@@ -31,6 +31,8 @@ TUNINGS = {
     "drop-d": ["D2", "A2", "D3", "G3", "B3", "E4"],
     "d-standard": ["D2", "G2", "C3", "F3", "A3", "D4"],
     "drop-c": ["C2", "G2", "C3", "F3", "A3", "D4"],
+    "dadgad": ["D2", "A2", "D3", "G3", "A3", "D4"],
+    "dadfae": ["D2", "A2", "D3", "F3", "A3", "E4"],  # Opeth, Ghost Reveries (owner, The Grand Conjuration)
 }
 
 
@@ -47,9 +49,43 @@ def midi_to_name(midi: int) -> str:
     return f"{NOTE_NAMES[midi % 12]}{midi // 12 - 1}"
 
 
+STANDARD = [40, 45, 50, 55, 59, 64]
+
+
+def _letters_to_midi(spec: str) -> list[int] | None:
+    """'DADFAE', 'dadgad', 'D A D F A E', 'Eb Ab Db Gb Bb Eb' (letters only, low string first) -> MIDI.
+
+    Each string gets the octave closest to the same string in standard tuning (ties go down, since
+    altered tunings are mostly lower): DADFAE -> D2 A2 D3 F3 A3 E4. A 'b' right after a letter is a
+    flat when that leaves six strings ('EbAbDbGbBbEb'); otherwise it is the note B.
+    """
+    compact = spec.replace(",", " ").replace(" ", "")
+    if not compact or any(ch.isdigit() for ch in compact):
+        return None
+    for flat_ok in (True, False):
+        pat = r"([A-Ga-g])([#b]?)" if flat_ok else r"([A-Ga-g])(#?)"
+        toks = re.findall(pat, compact)
+        if "".join(a + b for a, b in toks) == compact and len(toks) == len(STANDARD):
+            break
+    else:
+        return None
+    midis = []
+    for (letter, acc), ref in zip(toks, STANDARD):
+        name = letter.upper() + acc
+        pc = NOTE_NAMES.index(_FLAT.get(name, name))
+        cands = [pc + 12 * k for k in range(1, 8)]
+        midis.append(min(cands, key=lambda m: (abs(m - ref), m > ref)))
+    return midis
+
+
 def parse_tuning(spec: str) -> list[int]:
-    """'standard', 'drop-d', ... or six note names low to high: 'D2 A2 D3 G3 B3 E4'."""
-    names = TUNINGS.get(spec.strip().lower()) or spec.replace(",", " ").split()
+    """Low string to high string: 'standard', 'drop-d', ... (TUNINGS), letters 'DADFAE' / 'dadgad',
+    or note names with octaves 'D2 A2 D3 F3 A3 E4'."""
+    named = TUNINGS.get(spec.strip().lower())
+    letters = None if named else _letters_to_midi(spec)
+    if letters is not None:
+        return letters
+    names = named or spec.replace(",", " ").split()
     midis = [note_to_midi(n) for n in names]
     if midis != sorted(midis):
         raise ValueError(f"tuning must go low string to high string: {spec!r}")
