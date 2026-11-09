@@ -406,8 +406,11 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
                          f"(this tab used: {channel}).")
 
     if reference:
-        ref_notes = tc.parse_ascii_tab(reference.read_text(), tuning)
-        s = tc.score_against_reference(ref_notes, sorted(final, key=lambda n: (n["t"], n["midi"])))
+        ref_text = reference.read_text()
+        ref_spec = tc.reference_tuning(ref_text)
+        ref_tuning = tc.parse_tuning(ref_spec) if ref_spec else tuning
+        ref_notes = tc.parse_ascii_tab(ref_text, ref_tuning)
+        s = tc.score_against_reference(ref_notes, tc.playing_order(mapped))
         lines += [
             "",
             f"## Score against {reference.name}",
@@ -417,6 +420,9 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
             f"- Of the matched notes, same string+fret as the reference: {100 * s['same_string_fret']:.0f}%",
             "- Matching is by pitch order only (timing ignored); bends count as the fretted note.",
         ]
+        if ref_tuning != tuning:
+            lines.append(f"- The reference is written in {' '.join(tc.midi_to_name(m) for m in ref_tuning)}, not this "
+                         "tab's tuning, so string+fret matches mean little; the notes-right numbers still hold.")
     lines += ["", "## Tab", "", "```", header + tab_text, "```", ""]
     (out / "07_report.md").write_text("\n".join(lines))
     return tab_text

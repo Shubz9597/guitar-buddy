@@ -259,6 +259,11 @@ E|-----------------------------------|
         notes = tc.parse_ascii_tab(tab, self.STD)
         self.assertEqual([(n["string"], n["fret"]) for n in notes], [(5, 14), (5, 12), (4, 15), (3, 11)])
 
+    def test_reference_tuning_line(self):
+        self.assertEqual(tc.reference_tuning("# Source: x\n# tuning: DADF#AD\nD |--0--|"), "DADF#AD")
+        self.assertIsNone(tc.reference_tuning("e|--0--|"))
+        self.assertEqual(tc.parse_tuning("open-d"), tc.parse_tuning("DADF#AD"))
+
     def test_score(self):
         ref = [{"midi": m, "string": 4, "fret": m - 59} for m in [74, 76, 78, 76, 74]]
         ours = [dict(r) for r in ref]

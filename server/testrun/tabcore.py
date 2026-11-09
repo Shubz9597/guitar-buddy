@@ -32,7 +32,7 @@ TUNINGS = {
     "d-standard": ["D2", "G2", "C3", "F3", "A3", "D4"],
     "drop-c": ["C2", "G2", "C3", "F3", "A3", "D4"],
     "dadgad": ["D2", "A2", "D3", "G3", "A3", "D4"],
-    "dadfae": ["D2", "A2", "D3", "F3", "A3", "E4"],  # Opeth, Ghost Reveries (owner, The Grand Conjuration)
+    "open-d": ["D2", "A2", "D3", "F#3", "A3", "D4"],  # The Grand Conjuration (UG tab; UG calls it "Drop D")
 }
 
 
@@ -639,7 +639,7 @@ _TAB_LINE = re.compile(r"^\s*([A-Ga-g][#b]?)\s*[|:](.*)$")
 def parse_ascii_tab(text: str, tuning: list[int]):
     """Read a plain ASCII tab (6-line systems, high string on top).
 
-    Returns a list of notes in playing order: dicts with midi, string, fret.
+    Returns a list of notes in playing order (notes in one column low to high): dicts with midi, string, fret.
     '15b17' / '15r13' count as one note (fret 15). '5h7', '7p5', '5/7', '7\\5' count as two.
     Ignores x, ~, and other symbols; parentheses (ghost notes) are kept.
     """
@@ -669,11 +669,17 @@ def parse_ascii_tab(text: str, tuning: list[int]):
             i += n
         else:
             i += 1
-    events.sort(key=lambda e: (e[0], e[1], -e[2]))
+    events.sort(key=lambda e: (e[0], e[1], tuning[e[2]] + e[3]))  # notes in one column: low to high
     notes = []
     for _, _, string, fret in events:
         notes.append({"midi": tuning[string] + fret, "string": string, "fret": fret})
     return notes
+
+
+def reference_tuning(text: str) -> str | None:
+    """A reference tab can declare the tuning it is written in with a line '# tuning: DADF#AD'."""
+    m = re.search(r"^\s*#\s*tuning:\s*(\S.*?)\s*$", text, re.M | re.I)
+    return m.group(1) if m else None
 
 
 def lcs_pairs(a, b):
@@ -694,6 +700,12 @@ def lcs_pairs(a, b):
         else:
             j += 1
     return pairs
+
+
+def playing_order(groups):
+    """Our notes in the order the scorer compares them: group by group, low to high inside a chord
+    (the same order parse_ascii_tab gives the reference)."""
+    return [n for g in groups for n in sorted(g, key=lambda n: n["midi"])]
 
 
 def score_against_reference(ref_notes, our_notes):

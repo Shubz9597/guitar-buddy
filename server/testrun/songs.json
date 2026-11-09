@@ -22,7 +22,7 @@
     "end": "0:25",
     "kind": "riff",
     "tuning": "DADFAE",
-    "note": "Opening riff. Replaces Ghost of Perdition as the riff test (owner, 2026-11-08). PROVISIONAL times from sections.py (no vocals until ~1:23; guitar level changes ~0:25); owner to confirm. Guitar stem is two guitars panned hard L/R (L/R correlation 0.06) playing much the same riff; one side transcribes cleaner (43% unsure vs 52% both), so channel=left. Tuning DADFAE = D2 A2 D3 F3 A3 E4 (owner, 2026-11-10); the D2 notes seen per channel fit it.",
-    "channel": "left"
+    "note": "Opening riff. Replaces Ghost of Perdition as the riff test (owner, 2026-11-08). PROVISIONAL times from sections.py (no vocals until ~1:23; guitar level changes ~0:25); owner to confirm. Tuning DADFAE = D2 A2 D3 F3 A3 E4 (owner, 2026-11-10). Reference: the intro of a UG tab by immortal_stone, typed into /srv/guitar-buddy/work/grand-conjuration/reference.txt (never commit); that tab says D A D F# A D, which the owner says is wrong but close. Guitar stem is two guitars panned hard L/R (L/R correlation 0.06); scored against the intro, right finds 56% of notes, both 52%, left 46%, so channel=right.",
+    "channel": "right"
   }
 }
