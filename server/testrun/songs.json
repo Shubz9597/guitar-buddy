@@ -19,10 +19,10 @@
   "grand-conjuration": {
     "file": "Ghost Reveries (2005)/Opeth - Ghost Reveries - 07 - The Grand Conjuration.flac",
     "start": "0:00",
-    "end": "0:25",
+    "end": "0:38",
     "kind": "riff",
-    "tuning": "DADFAE",
-    "note": "Opening riff. Replaces Ghost of Perdition as the riff test (owner, 2026-11-08). PROVISIONAL times from sections.py (no vocals until ~1:23; guitar level changes ~0:25); owner to confirm. Tuning DADFAE = D2 A2 D3 F3 A3 E4 (owner, 2026-11-10). Reference: the intro of a UG tab by immortal_stone, typed into /srv/guitar-buddy/work/grand-conjuration/reference.txt (never commit); that tab says D A D F# A D, which the owner says is wrong but close. Guitar stem is two guitars panned hard L/R (L/R correlation 0.06); scored against the intro, right finds 56% of notes, both 52%, left 46%, so channel=right.",
+    "tuning": "drop-d",
+    "note": "Intro riff + first power-chord section, bars 1-32 of the OFFICIAL Ultimate Guitar tab (owner, 2026-11-10): tuning D A D G B E (drop D), 220 bpm, 32 bars ~ 0:00-0:37 (bar 5's Eb chord is at ~7.1 s in the audio). Reference typed into /srv/guitar-buddy/work/grand-conjuration/reference.txt (never commit). Earlier guesses DADFAE / open D (fan tab) were wrong. Guitar stem is two guitars panned hard L/R (L/R correlation 0.06).",
     "channel": "right"
   }
 }
