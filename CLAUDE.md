@@ -72,18 +72,18 @@ These override `docs/product-spec.md` where they differ.
 
 - Python 3.11 or 3.12 in a venv or Docker (not the newest Python: torch/Demucs/Basic Pitch lag). Code goes in `server/` in this repo.
 - GPU: GTX 1650 4 GB. Demucs `htdemucs_6s` with `--segment 7` (drop to 5 on out-of-memory); `--shifts` costs time, not memory. On CUDA out-of-memory, retry the stage on CPU. Everything else (Basic Pitch, pYIN, beat tracking, fret mapping, Rubber Band) is fine on CPU. One job at a time; every stage writes its output and is skipped on rerun.
-- Docker with GPU needs the NVIDIA Container Toolkit; check before relying on it.
+- Docker with GPU needs the NVIDIA Container Toolkit (installed 2026-11-10, `--gpus all` works).
 
 ### Server state (checked 2026-11-08)
 
 - OK: Node 24.21 / npm 11.19 (`npm test` 91/91 pass), Docker 29.7 (user in `docker` group), ffmpeg, librubberband libs, 347 GB free on `/`.
 - Host Python is 3.14 only. **Python work runs in Docker** (`python:3.11-slim-bookworm`, image `guitar-buddy-testrun`): the session user has no passwordless sudo, so dnf installs need the owner, and GitHub downloads (uv's Python builds) returned 504 from this host. PyPI, download.pytorch.org, Docker Hub and dl.fbaipublicfiles.com (Demucs weights) work.
-- Installed by the owner 2026-11-09: `akmod-nvidia` + `xorg-x11-drv-nvidia-cuda` 615.71.09 (kmod built and signed by the local akmods key for 7.2.7 and 7.2.15), `rubberband` CLI. The akmods key is queued with `mokutil --import`; **the GPU works only after the owner approves it at the laptop on the next reboot** (blue MOK screen: Enroll MOK -> Continue -> Yes -> password). Until then nouveau stays loaded and everything runs on CPU. Check with `modinfo -F signer nvidia`, `lsmod | grep nvidia`, `nvidia-smi`.
-- Still missing: NVIDIA Container Toolkit (NVIDIA's own repo; not in Fedora/RPM Fusion) for `--gpus all`. `docker-run.sh` switches to the GPU by itself once `nvidia-ctk` and `nvidia-smi` work.
+- Installed by the owner 2026-11-09: `akmod-nvidia` + `xorg-x11-drv-nvidia-cuda` 615.71.09 (kmod built and signed by the local akmods key for 7.2.7 and 7.2.15), `rubberband` CLI. The akmods key was enrolled by the owner at the laptop (MOK screen) on 2026-11-10; the GPU works. If a future key change needs re-enrolling: `sudo mokutil --import /etc/pki/akmods/certs/public_key.der`, reboot, and approve at the blue MOK screen (keyboard at the laptop; not possible over SSH). `mokutil --list-new` needs sudo to show a pending key. Check with `lsmod | grep nvidia`, `nvidia-smi`.
+- NVIDIA Container Toolkit installed by the owner 2026-11-10 from NVIDIA's own repo (not in Fedora/RPM Fusion), `nvidia-ctk runtime configure --runtime=docker`. `docker-run.sh` uses the GPU by itself when `nvidia-ctk` and `nvidia-smi` work.
 - **Suspend**: the GDM login screen has its own power settings (suspend after 15 min idle) and suspended the server at 01:16 on 2026-11-09 while nobody was logged in at the seat, freezing SSH sessions. Fixed: `sleep/suspend/hibernate/hybrid-sleep.target` are masked. The lid is ignored via `/etc/systemd/logind.conf.d/server.conf`; the two header-less lines in `/etc/systemd/logind.conf` are ignored by logind and harmless.
 - sudo needs the owner's password: hand them exact commands, one at a time (pasted blocks get eaten by dnf's `[y/N]` prompt).
 - **SELinux is enforcing** and the music folder carries the music server's container label (`container_file_t:s0:c72,c523`). Never mount it with `:z`/`:Z` (relabels it, can break the music server). `docker-run.sh` uses `--security-opt label=disable` and mounts it `:ro`.
-- **Secure Boot is on**: the akmod-built NVIDIA module must be signed and its key enrolled with `mokutil` at a reboot (needs a keyboard and screen at the laptop), or Secure Boot turned off in firmware. Until then the GPU is unusable and Demucs runs on CPU.
+- **Secure Boot is on**: the akmod-built NVIDIA module is signed with the local akmods key, enrolled 2026-11-10.
 - No separate CUDA toolkit needed: the PyTorch cu126 wheels bundle the CUDA runtime and only need the driver.
 - RAM was tight at check time (~4 GB free, swap nearly full; desktop apps running). Demucs on a 45 s clip is fine; full songs on CPU may swap.
 
@@ -170,7 +170,9 @@ Then the fret-mapper weights were swept (`tabcore.COST`, judged by the weaker so
 | Comfortably Numb | 64% / **80%** / **84%** | 60 / 69 / 77 |
 | Grand Conjuration | **94%** / 68% / 77% | 61 / 64 / 72 |
 
-MuScriptor **large** tested on CN (CPU): 9.7 min for 40 s of audio and worse (60/76/63), so medium stays; maybe retry on the GPU.
+MuScriptor **large** is worse than medium on both songs, so medium stays: CN 60/76/63 (medium 64/80/84), GC 86/67/75 (medium 94/68/77). It is also slow: CN 9.7 min on CPU, 6.1 min on the GPU. Its fp32 weights (5.5 GB) do not fit the 4 GB GPU; it only ran with `--dtype float16` after loading and casting on the CPU first and then moving to CUDA (MuScriptor loads straight onto the device, and its conditioners keep a `.device` attribute that must be updated too). Not worth a repo wrapper unless a better large model appears.
+
+**On the GPU (2026-11-10)** the scores are unchanged and whole runs (fresh stems + MuScriptor medium) take CN 90 s, GC 76 s, Shesmovedon 146 s; Demucs is ~6 s per clip, MuScriptor medium ~1.3 s per s of audio, pYIN (CPU) 20-30 s.
 Left to reach the goal: CN recall (the fast run D14/12-11-9-7 and the low D-string phrase are not in MuScriptor's output in any class),
 GC precision (68%), GC string+fret (77%).
 
