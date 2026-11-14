@@ -10,11 +10,12 @@
   },
   "shesmovedon": {
     "file": "Lightbulb Sun (2000)/Porcupine Tree - Lightbulb Sun - 04 - Shesmovedon.flac",
-    "start": "3:26",
-    "end": "4:25",
+    "start": "3:25",
+    "end": "5:07",
     "kind": "lead",
     "tuning": "standard",
-    "note": "Solo. ~400 ms delay on the lead (owner); the echo filter finds 0.42 s. No tab exists. PROVISIONAL times from sections.py (longest no-vocal stretch with loud guitar); owner to confirm by ear. 2:35-3:05 was checked: vocals and a repeated rhythm figure, not the solo."
+    "note": "Final solo, bars 1-31 of Sergio Raimundo Cavaco's transcription (commissioned by the owner, 2026-11-15): standard tuning, 71 bpm; pickup at 3:25.8 (bar 1 ~3:23.1), last note ~5:04.5, aligned by MuScriptor's notes. ~400 ms delay on the lead (owner); the echo filter finds 0.42 s. Reference converted from the PDF text layer into /srv/guitar-buddy/work/shesmovedon/reference.txt (never commit). HELD OUT: measured only, never used to tune the algorithm.",
+    "holdout": true
   },
   "grand-conjuration": {
     "file": "Ghost Reveries (2005)/Opeth - Ghost Reveries - 07 - The Grand Conjuration.flac",

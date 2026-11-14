@@ -82,7 +82,17 @@ class LeadFilter(unittest.TestCase):
         kept, counts = tc.lead_filter(notes)
         self.assertEqual([(x["midi"], round(x["end"], 2)) for x in kept],
                          [(78, 2.0), (76, 2.3), (76, 2.55), (74, 2.7), (79, 3.0), (64, 3.9)])
-        self.assertEqual(counts, {"merged": 2, "under_lead": 1, "below_register": 1, "echo_delay": None, "echoes": 0})
+        self.assertEqual(counts, {"merged": 2, "repicks": 0, "under_lead": 1, "below_register": 1, "echo_delay": None,
+                                  "echoes": 0})
+
+    def test_repeated_pick_edge_to_edge_is_not_merged(self):
+        # MuScriptor writes A3 A3 A3 edge to edge. The audio shows a fresh attack before the 2nd note but not the 3rd.
+        notes = [note(1.0, 57, dur=0.21), note(1.21, 57, dur=0.21), note(1.42, 57, dur=0.21)]
+        self.assertEqual([n["t"] for n in tc.joins(notes)], [1.21, 1.42])
+        tc.apply_attacks(notes, [{"t": 1.21, "midi": 57, "attack_db": 2.5}, {"t": 1.42, "midi": 57, "attack_db": -1.0}])
+        kept, counts = tc.lead_filter(notes)
+        self.assertEqual([(x["t"], round(x["end"], 2)) for x in kept], [(1.0, 1.21), (1.21, 1.63)])
+        self.assertEqual((counts["merged"], counts["repicks"]), (1, 1))
 
     def test_delay_echoes(self):
         # A phrase through a 380 ms delay: every note comes back at 60% volume (and again at 2x).

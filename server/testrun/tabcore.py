@@ -178,23 +178,59 @@ def group_notes(notes: list[dict], window: float = 0.035) -> list[list[dict]]:
     return groups
 
 
+JOIN_GAP = 0.015  # s; notes of one pitch closer than this are "back to back"
+# A held note's energy at its own harmonics can only fade (vibrato wobbles it a little); a rise right after the join
+# means the string was picked again. 0 dB = "any rise", a threshold with a meaning rather than one fitted to a song.
+# On CN (MuScriptor) it took the lead from 64/80/84 to 79/71/78 found/real/string+fret; no detector variant
+# (band width, mean/max windows, high-frequency pick noise) separated repeats from held notes much better.
+REPICK_DB = 0.0
+
+
+def joins(notes: list[dict]) -> list[dict]:
+    """Notes that start right where an earlier note of the same pitch ends (candidates for a merge)."""
+    last: dict[int, dict] = {}
+    out = []
+    for n in sorted(notes, key=lambda n: n["t"]):
+        prev = last.get(n["midi"])
+        if prev is not None and 0 <= n["t"] - prev["end"] < JOIN_GAP:
+            out.append(n)
+        last[n["midi"]] = n
+    return out
+
+
+def apply_attacks(notes: list[dict], attacks: list[dict]) -> None:
+    """Copy attack_db (from run.py's attacks stage, 04_attacks.json) onto the notes it was measured for."""
+    by_key = {(round(a["t"], 3), a["midi"]): a["attack_db"] for a in attacks}
+    for n in notes:
+        db = by_key.get((round(n["t"], 3), n["midi"]))
+        if db is not None:
+            n["attack_db"] = db
+
+
+def is_repick(n: dict) -> bool:
+    return n.get("attack_db") is not None and n["attack_db"] >= REPICK_DB
+
+
 def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
     """Lead mode: keep the solo line out of a guitar stem that also holds rhythm parts and bass bleed.
 
     1. Merge back-to-back notes of the same pitch (gap < 15 ms): Basic Pitch re-triggers held notes
-       with vibrato; real repeated picks leave a gap.
+       with vibrato. MuScriptor writes every note edge to edge, so a real repeated pick looks the same; when
+       the audio shows a fresh attack at the join (n["attack_db"] >= REPICK_DB, run.py attacks stage), keep both.
     1b. If the notes show a delay pedal (find_echo_delay), drop the quieter repeats (echo_filter).
     2. Skyline: drop a note if a note >= 3 semitones higher covers >= 50% of it (accompaniment under the lead).
     3. Register: drop notes more than an octave below the lead's median pitch that are also quieter
        than 70% of the lead's median amplitude (rhythm parts while the lead rests).
     Returns (kept, counts); counts also carries echo_delay (seconds or None) and echoes (dropped).
     """
-    counts = {"merged": 0, "under_lead": 0, "below_register": 0}
+    counts = {"merged": 0, "repicks": 0, "under_lead": 0, "below_register": 0}
     by_pitch: dict[int, dict] = {}
     merged = []
     for n in sorted(notes, key=lambda n: n["t"]):
         prev = by_pitch.get(n["midi"])
-        if prev is not None and 0 <= n["t"] - prev["end"] < 0.015:
+        back_to_back = prev is not None and 0 <= n["t"] - prev["end"] < JOIN_GAP
+        counts["repicks"] += back_to_back and is_repick(n)
+        if back_to_back and not is_repick(n):
             prev["end"] = max(prev["end"], n["end"])
             prev["amp"] = max(prev["amp"], n["amp"])
             counts["merged"] += 1

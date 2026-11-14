@@ -173,8 +173,27 @@ Then the fret-mapper weights were swept (`tabcore.COST`, judged by the weaker so
 MuScriptor **large** is worse than medium on both songs, so medium stays: CN 60/76/63 (medium 64/80/84), GC 86/67/75 (medium 94/68/77). It is also slow: CN 9.7 min on CPU, 6.1 min on the GPU. Its fp32 weights (5.5 GB) do not fit the 4 GB GPU; it only ran with `--dtype float16` after loading and casting on the CPU first and then moving to CUDA (MuScriptor loads straight onto the device, and its conditioners keep a `.device` attribute that must be updated too). Not worth a repo wrapper unless a better large model appears.
 
 **On the GPU (2026-11-10)** the scores are unchanged and whole runs (fresh stems + MuScriptor medium) take CN 90 s, GC 76 s, Shesmovedon 146 s; Demucs is ~6 s per clip, MuScriptor medium ~1.3 s per s of audio, pYIN (CPU) 20-30 s.
-Left to reach the goal: CN recall (the fast run D14/12-11-9-7 and the low D-string phrase are not in MuScriptor's output in any class),
-GC precision (68%), GC string+fret (77%).
+**Shesmovedon reference (2026-11-15).** The owner commissioned a transcription of the final solo from Sergio Raimundo Cavaco
+(sergiocavaco.com): standard tuning, 71 bpm, 31 bars, segment 3:25-5:07 (pickup at 3:25.8, aligned by MuScriptor's notes). It was
+converted from the PDF's text layer (exact fret numbers; strings from the detected tab staff lines) into
+`work/shesmovedon/reference.txt` (429 notes; tied/ghost notes in brackets and dead notes X left out). **Shesmovedon is held out**
+(`"holdout": true` in songs.json): it is measured, never used to choose or tune a change, so it shows how a fix does on a song the
+algorithm was not fitted to. Judge changes on CN + GC only.
+
+**Repeated picks (2026-11-15).** Diagnosis per stage: MuScriptor's lead class already holds 83% (CN) / 74% (SMO) of the tab's
+notes, but `lead_filter` cut that to 64% / 38%. Its "merge back-to-back same-pitch notes" step (built for Basic Pitch re-triggers)
+merged real repeated picks, because MuScriptor writes notes edge to edge. New cached stage `attacks` (`04_attacks.json`): at each
+such join, the energy rise at the note's own harmonics; `lead_filter` keeps the notes apart when it rises at all (`REPICK_DB = 0`).
+Sharper detectors (band width, mean windows, pick noise) did not separate repeats from held notes better on CN, so no fitted threshold.
+
+| Song | found / real / string+fret | was |
+|---|---|---|
+| Comfortably Numb | 79% / 72% / 83% | 64 / 80 / 84 |
+| Grand Conjuration (riff, unchanged) | 94% / 68% / 77% | |
+| Shesmovedon (held out) | 51% / 80% / 52% | 38 / 79 / 50 |
+
+Left to reach the goal: CN recall 79%, GC precision (68%), GC string+fret (77%), and on the held-out SMO: recall (the lead class has
+74%; the skyline step drops octave-doubled notes there) and string+fret (52%).
 
 ## Other open work
 

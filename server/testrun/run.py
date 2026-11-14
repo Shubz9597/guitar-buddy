@@ -14,6 +14,7 @@ Outputs go to <work-dir>/<song>/ (default /srv/guitar-buddy/work):
     03_yourmt3.json      YourMT3+ guitar notes from the mix (riffs; 03_yourmt3_all.json = every instrument)
     03_muscriptor.json   MuScriptor guitar notes (03_muscriptor_raw.json = its events; made by docker-run.sh,
                          which runs MuScriptor in its own image between `run.py --prepare` and `run.py`)
+    04_attacks.json      energy rise at joins of same-pitch notes (repeated pick vs held note) (cached)
     04_pyin.csv          pYIN pitch track of the guitar stem               (cached)
     05_beats.json        tempo + beat times from the drums stem            (cached)
     06_notes.csv         final notes: time, pitch, string, fret, flags     (rebuilt every run)
@@ -43,7 +44,7 @@ import tabcore as tc  # noqa: E402
 
 MUSIC_DIR = Path(os.environ.get("GB_MUSIC_DIR", "/mnt/workspace/music-server/downloads/complete"))
 WORK_DIR = Path(os.environ.get("GB_WORK_DIR", "/srv/guitar-buddy/work"))
-CACHED_STAGES = ["clip", "separate", "pitch", "pyin", "beats"]
+CACHED_STAGES = ["clip", "separate", "pitch", "attacks", "pyin", "beats"]
 SR = 44100
 
 
@@ -265,6 +266,38 @@ def stage_muscriptor(out: Path, clip_start: float, kind: str, notes_json: Path):
     return {"kept": how}
 
 
+def stage_attacks(source: Path, clip_start: float, notes_json: Path, out: Path):
+    """For every note that starts where a same-pitch note ends (tabcore.joins): how much the energy at that pitch's
+    first 4 harmonics (+-0.4 semitone) rises across the join, max over 0..60 ms after vs 10..60 ms before, in dB.
+    tabcore.lead_filter keeps such a note separate (a repeated pick) instead of merging it when the energy rises."""
+    import librosa
+    import numpy as np
+
+    y, sr = librosa.load(str(source), sr=22050, mono=True)
+    hop = 128
+    power = np.abs(librosa.stft(y, n_fft=4096, hop_length=hop)) ** 2
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=4096)
+    fps = sr / hop
+
+    def energy(midi, frames):
+        bins = np.zeros(len(freqs), bool)
+        for h in (1, 2, 3, 4):
+            f = float(librosa.midi_to_hz(midi)) * h
+            bins |= (freqs >= f * 2 ** (-0.4 / 12)) & (freqs <= f * 2 ** (0.4 / 12))
+        frames = [k for k in frames if 0 <= k < power.shape[1]]
+        return max((float(power[bins, k].sum()) for k in frames), default=0.0)
+
+    rows = []
+    for n in tc.joins(json.loads(notes_json.read_text())):
+        f = int(round((n["t"] - clip_start) * fps))
+        before = energy(n["midi"], range(f - int(0.06 * fps), f - int(0.01 * fps)))
+        after = energy(n["midi"], range(f, f + int(0.06 * fps)))
+        rows.append({"t": n["t"], "midi": n["midi"],
+                     "attack_db": round(10 * float(np.log10((after + 1e-12) / (before + 1e-12))), 2)})
+    out.write_text(json.dumps(rows, indent=0))
+    return {"joins": len(rows), "repicks": sum(r["attack_db"] >= tc.REPICK_DB for r in rows)}
+
+
 def lead_pitch_range(basicpitch_json: Path, seg_start: float, seg_end: float):
     """MIDI range for pYIN in lead mode: the lead line's 5th-95th percentile, 3 semitones below
     (slides) and 4 above (bends). None if there are too few notes to tell."""
@@ -340,6 +373,8 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
     raw = json.loads((out / tc.NOTES_FILES[transcriber]).read_text())
     f0_times, f0_midi, prob = load_pyin(out / "04_pyin.csv")
     seg_notes = [n for n in raw if seg_start <= n["t"] < seg_end]
+    if (out / "04_attacks.json").exists():
+        tc.apply_attacks(seg_notes, json.loads((out / "04_attacks.json").read_text()))
     mapped, dropped, info = tc.transcribe(seg_notes, f0_times, f0_midi, prob, tuning, kind=kind,
                                           use_lead_filter=use_lead_filter)
     n_raw, lf_counts, pyin_stats = info["raw"], info["lead_filter"], info["pyin"]
@@ -408,7 +443,8 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
         f"- Transcriber: {transcriber}"
         + (f" ({STAGE_INFO['pitch'].get('kept')})" if STAGE_INFO.get("pitch", {}).get("kept") else "")
         + f"; notes in segment: {n_raw}",
-        (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes, dropped {lf_counts['under_lead']} under "
+        (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes (kept {lf_counts['repicks']} repeated picks), "
+         f"dropped {lf_counts['under_lead']} under "
          f"the lead and {lf_counts['below_register']} quiet low notes" if lf_counts is not None
          else "- Lead filter: off"),
         (f"- Delay echoes: repeat every {info['echo_delay'] * 1000:.0f} ms found, {info['echoes']} echo notes dropped"
@@ -581,6 +617,8 @@ def main():
         else:
             stage_pitch(source, clip_start, notes_json)
             st.finish()
+    if st.need("attacks", {"v": 1}, [out / "04_attacks.json"]):
+        st.finish(stage_attacks(source, clip_start, notes_json, out / "04_attacks.json"))
     midi_range = None
     if cfg["kind"] == "lead" and not a.no_lead_filter:
         midi_range = lead_pitch_range(notes_json, seg_start, seg_end)

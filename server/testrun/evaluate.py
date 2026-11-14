@@ -5,11 +5,12 @@
     python3 server/testrun/evaluate.py --misses   # also list missed / extra notes per song
 
 It reruns only the note-to-tab step (tabcore.transcribe) from the cached stage outputs in
-<work>/<song>/ (03_muscriptor.json / 03_basicpitch.json / 03_yourmt3.json, 04_pyin.csv), so run.py must have run for the song first.
+<work>/<song>/ (03_muscriptor.json / 03_basicpitch.json / 03_yourmt3.json, 04_attacks.json, 04_pyin.csv), so run.py must have run for the song first.
 Reference tabs live in <work>/<song>/reference.txt (copyrighted: never commit them).
 
 The goal: a draft tab close to the owner's screenshot. Every fix must move these numbers on all songs,
-not just one (no per-song tuning of the algorithm).
+not just one (no per-song tuning of the algorithm). Songs with "holdout": true in songs.json are only measured:
+never judge or tune a change by them, so they stay an honest check on songs the algorithm was not fitted to.
 """
 
 from __future__ import annotations
@@ -52,6 +53,8 @@ def evaluate(song: str, cfg: dict, work: Path):
     seg_start, seg_end = tc.parse_time(cfg["start"]), tc.parse_time(cfg["end"])
     tuning = tc.parse_tuning(cfg.get("tuning", "standard"))
     raw = [n for n in json.loads(notes_json.read_text()) if seg_start <= n["t"] < seg_end]
+    if (out / "04_attacks.json").exists():
+        tc.apply_attacks(raw, json.loads((out / "04_attacks.json").read_text()))
     f0_times, f0_midi, prob = load_pyin(out / "04_pyin.csv")
     mapped, _, _ = tc.transcribe(raw, f0_times, f0_midi, prob, tuning, kind=cfg.get("kind", "lead"))
     ours = tc.playing_order(mapped)
@@ -88,11 +91,12 @@ def main():
                 f"{tc.midi_to_name(o['midi'])}@{tc.fmt_time(o['t'])}" for j, o in enumerate(ours) if j not in hit_ours))
     if not rows:
         sys.exit("no song has both a reference.txt and cached stage outputs")
-    print(f"\n{'song':20} {'notes found':>12} {'real':>6} {'string+fret':>12}   goal {GOAL['recall']:.0%} / "
+    print(f"\n{'song':31} {'notes found':>12} {'real':>6} {'string+fret':>12}   goal {GOAL['recall']:.0%} / "
           f"{GOAL['precision']:.0%} / {GOAL['same_string_fret']:.0%}")
     for song, s, met in rows:
         cells = [f"{s[k]:.0%}{'' if met[k] else ' x'}" for k in ("recall", "precision", "same_string_fret")]
-        print(f"{song:20} {cells[0]:>12} {cells[1]:>6} {cells[2]:>12}   ({s['matched']}/{s['reference_notes']} ref notes,"
+        label = song + (" (held out)" if songs[song].get("holdout") else "")
+        print(f"{label:31} {cells[0]:>12} {cells[1]:>6} {cells[2]:>12}   ({s['matched']}/{s['reference_notes']} ref notes,"
               f" {s['our_notes']} ours)")
     print("\nGOAL MET" if met_all else "\ngoal not met yet (x = below goal)")
 
