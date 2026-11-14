@@ -184,6 +184,7 @@ JOIN_GAP = 0.015  # s; notes of one pitch closer than this are "back to back"
 # On CN (MuScriptor) it took the lead from 64/80/84 to 79/71/78 found/real/string+fret; no detector variant
 # (band width, mean/max windows, high-frequency pick noise) separated repeats from held notes much better.
 REPICK_DB = 0.0
+OCTAVE_ONSET = 0.03  # s; an octave pair starting this close together counts as one note heard twice (lead_filter 1a)
 
 
 def joins(notes: list[dict]) -> list[dict]:
@@ -217,13 +218,17 @@ def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
     1. Merge back-to-back notes of the same pitch (gap < 15 ms): Basic Pitch re-triggers held notes
        with vibrato. MuScriptor writes every note edge to edge, so a real repeated pick looks the same; when
        the audio shows a fresh attack at the join (n["attack_db"] >= REPICK_DB, run.py attacks stage), keep both.
+    1a. Octave doubles: two notes exactly an octave apart that start together (within OCTAVE_ONSET) -> keep the
+        lower. Hearing a note an octave too high (distortion's strong 2nd harmonic) is the classic transcriber
+        error; Sergio's Shesmovedon tab has single low notes where MuScriptor gives E3+E4. A real octave shape
+        in a solo is rarer than this error. CN unchanged; found on (and so not blind-tested by) Shesmovedon.
     1b. If the notes show a delay pedal (find_echo_delay), drop the quieter repeats (echo_filter).
     2. Skyline: drop a note if a note >= 3 semitones higher covers >= 50% of it (accompaniment under the lead).
     3. Register: drop notes more than an octave below the lead's median pitch that are also quieter
        than 70% of the lead's median amplitude (rhythm parts while the lead rests).
     Returns (kept, counts); counts also carries echo_delay (seconds or None) and echoes (dropped).
     """
-    counts = {"merged": 0, "repicks": 0, "under_lead": 0, "below_register": 0}
+    counts = {"merged": 0, "repicks": 0, "octave_doubles": 0, "under_lead": 0, "below_register": 0}
     by_pitch: dict[int, dict] = {}
     merged = []
     for n in sorted(notes, key=lambda n: n["t"]):
@@ -237,6 +242,16 @@ def lead_filter(notes: list[dict]) -> tuple[list[dict], dict]:
             continue
         merged.append(n)
         by_pitch[n["midi"]] = n
+
+    upper = set()
+    for i, a in enumerate(merged):
+        for b in merged[i + 1:]:
+            if b["t"] - a["t"] > OCTAVE_ONSET:
+                break
+            if abs(a["midi"] - b["midi"]) == 12:
+                upper.add(id(a if a["midi"] > b["midi"] else b))
+    merged = [n for n in merged if id(n) not in upper]
+    counts["octave_doubles"] = len(upper)
 
     # Delay echoes go before the skyline: an echo of a high note overlapping the next, lower, real note
     # would otherwise hide that real note as "under the lead".

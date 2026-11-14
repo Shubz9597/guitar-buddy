@@ -190,10 +190,15 @@ Sharper detectors (band width, mean windows, pick noise) did not separate repeat
 |---|---|---|
 | Comfortably Numb | 79% / 72% / 83% | 64 / 80 / 84 |
 | Grand Conjuration (riff, unchanged) | 94% / 68% / 77% | |
-| Shesmovedon (held out) | 51% / 80% / 52% | 38 / 79 / 50 |
+| Shesmovedon (held out) | 51% / 80% / 52%; 55 / 82 / 54 with the octave rule | 38 / 79 / 50 |
 
-Left to reach the goal: CN recall 79%, GC precision (68%), GC string+fret (77%), and on the held-out SMO: recall (the lead class has
-74%; the skyline step drops octave-doubled notes there) and string+fret (52%).
+**Octave doubles (2026-11-15).** MuScriptor hears much of the SMO solo as E3+E4 pairs; Sergio's tab has single low notes and a web
+search found nothing saying the record is octave-doubled (Wilson's octave pedal is documented only from 2008). `lead_filter` now keeps
+the lower of two notes an octave apart that start within 30 ms. CN unchanged (79/72/83). The idea came from looking at SMO, so for this
+rule SMO is not a blind check; confirm it on the next lead songs.
+
+Left to reach the goal: CN recall 79%, GC precision (68%), GC string+fret (77%), and on the held-out SMO: recall 55% (the lead class
+has 74%) and string+fret 54% (Sergio plays the opening low on the A/D strings).
 
 ## Other open work
 

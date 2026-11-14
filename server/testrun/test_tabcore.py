@@ -82,8 +82,15 @@ class LeadFilter(unittest.TestCase):
         kept, counts = tc.lead_filter(notes)
         self.assertEqual([(x["midi"], round(x["end"], 2)) for x in kept],
                          [(78, 2.0), (76, 2.3), (76, 2.55), (74, 2.7), (79, 3.0), (64, 3.9)])
-        self.assertEqual(counts, {"merged": 2, "repicks": 0, "under_lead": 1, "below_register": 1, "echo_delay": None,
-                                  "echoes": 0})
+        self.assertEqual(counts, {"merged": 2, "repicks": 0, "octave_doubles": 0, "under_lead": 1, "below_register": 1,
+                                  "echo_delay": None, "echoes": 0})
+
+    def test_octave_double_keeps_lower(self):
+        # E3 heard as E3 + E4 at the same moment, then a lone G4: keep E3 and G4.
+        notes = [note(1.0, 52, dur=0.3), note(1.01, 64, dur=0.6), note(1.5, 67, dur=0.3)]
+        kept, counts = tc.lead_filter(notes)
+        self.assertEqual([x["midi"] for x in kept], [52, 67])
+        self.assertEqual(counts["octave_doubles"], 1)
 
     def test_repeated_pick_edge_to_edge_is_not_merged(self):
         # MuScriptor writes A3 A3 A3 edge to edge. The audio shows a fresh attack before the 2nd note but not the 3rd.

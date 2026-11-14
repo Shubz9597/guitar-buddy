@@ -443,7 +443,7 @@ def build_tab(out: Path, seg_start, seg_end, kind, tuning, clip_start, stems: Pa
         f"- Transcriber: {transcriber}"
         + (f" ({STAGE_INFO['pitch'].get('kept')})" if STAGE_INFO.get("pitch", {}).get("kept") else "")
         + f"; notes in segment: {n_raw}",
-        (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes (kept {lf_counts['repicks']} repeated picks), "
+        (f"- Lead filter: merged {lf_counts['merged']} re-triggered held notes (kept {lf_counts['repicks']} repeated picks), dropped {lf_counts['octave_doubles']} octave doubles, "
          f"dropped {lf_counts['under_lead']} under "
          f"the lead and {lf_counts['below_register']} quiet low notes" if lf_counts is not None
          else "- Lead filter: off"),
